@@ -19,10 +19,13 @@ from src.core import (
     DEFAULT_LABEL_MODULUS,
     DEFAULT_STEP_RADIANS,
     EXTENDED_MODULI,
+    FAMILY_37,
+    FAMILY_111,
     SUGGESTED_MODULI,
     TRINITY_DIGITS,
     TWO_PI,
     VORTEX_CYCLE,
+    angular_sector_stats,
     circle_angles,
     circle_positions,
     digital_root,
@@ -30,14 +33,19 @@ from src.core import (
     doubling_cycle_structure,
     doubling_edges,
     doubling_orbit,
+    family_orbit_report,
+    geometric_return_stats,
+    label_angle_alignment,
     labels_for_orbit,
     modular_label,
     modulus_sweep_report,
+    orbit_stats,
     paired_label,
     position_to_label,
     position_to_vortex_digit,
     register_mapping,
     resolve_moduli,
+    resonance_scan,
     step_radians_for,
     trinity_related_sequence,
     unpack_paired_label,
@@ -292,6 +300,53 @@ class TestStepModesAndPaired:
         x9, y9 = circle_positions(5, step_radians_for(9, "m_over_pi"))
         x37, y37 = circle_positions(5, step_radians_for(37, "m_over_pi"))
         assert not np.allclose(x9, x37)
+
+
+class TestOrbitStats:
+    def test_geometric_return_bounds(self):
+        stats = geometric_return_stats(DEFAULT_STEP_RADIANS, num_steps=200)
+        assert 1 <= stats["best_return_k"] <= 200
+        assert 0.0 <= stats["best_return_dist"] <= 0.5
+        assert stats["rotation_number"] > 0
+
+    def test_angular_sector_stats_shape(self):
+        ang = circle_angles(100)
+        s = angular_sector_stats(ang, n_bins=18)
+        assert s["n_bins"] == 18
+        assert 0.0 <= s["entropy_ratio"] <= 1.0 + 1e-9
+        assert 0.0 <= s["resultant_length"] <= 1.0 + 1e-9
+        assert len(s["bin_counts"]) == 18
+
+    def test_label_angle_alignment_range(self):
+        ang = circle_angles(120)
+        labs = labels_for_orbit(120, modulus=9)
+        a = label_angle_alignment(labs, ang, n_angle_bins=12)
+        assert 0.0 <= a["nmi"] <= 1.0 + 1e-6
+        assert 0.0 <= a["cramers_v"] <= 1.0 + 1e-6
+
+    def test_orbit_stats_mod37(self):
+        r = orbit_stats(37, "m_over_pi", num_steps=200)
+        assert r["modulus"] == 37
+        assert r["length_from_1"] == 36
+        assert r["num_cycles"] == 2
+        assert "label_angle_nmi" in r
+        assert r["step_radians"] == step_radians_for(37, "m_over_pi")
+
+    def test_family_37_report(self):
+        rows = family_orbit_report(family="37", num_steps=150)
+        assert len(rows) == len(FAMILY_37) * 2
+        mods = {r["modulus"] for r in rows}
+        assert mods == set(FAMILY_37)
+
+    def test_resonance_scan_111(self):
+        rows = resonance_scan(num_steps=200)
+        assert len(rows) == len(FAMILY_111) * 2
+        coupled = [r for r in rows if r["step_mode"] == "m_over_pi"]
+        assert all("nmi_delta_vs_fixed" in r for r in coupled)
+
+    def test_resolve_family(self):
+        assert resolve_moduli(family="37") == FAMILY_37
+        assert resolve_moduli(family="111") == FAMILY_111
 
 
 class TestVortexLayout:

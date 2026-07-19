@@ -197,6 +197,29 @@ Packed code: `(digital_root − 1) · m + (k mod m)`.
 
 Core helpers: `doubling_orbit`, `modular_label`, `step_radians_for`, `paired_label`, `labels_for_orbit`.
 
+### Quantitative analysis
+
+```bash
+# Single modulus: both step modes, fill + near-return + label–angle NMI
+python src/main.py --orbit-stats -m 37 --num-steps 500
+
+# 37-family (37, 111, 333): stats + circle/torus dual-mode panels
+python src/main.py --family-37 --num-steps 200
+
+# 111 prime-mover motif: rank moduli by label–angle resonance under m/π
+python src/main.py --resonance-scan --num-steps 600
+```
+
+| Metric | Meaning |
+|--------|---------|
+| `len×2` / `cyc` | Algebraic ×2 orbit from 1 / number of cycles on ℤ/mℤ |
+| `ret_k` / `ret_d` | Best geometric near-return step and fractional-turn distance |
+| `ent` / `R` | Angular entropy ratio (→1 flat) and Rayleigh resultant (→0 uniform) |
+| `NMI` / `V` | Label–angle mutual information / Cramér's V (resonance proxy) |
+| `ΔNMI` | NMI under `m/π` minus NMI under fixed `9/π` |
+
+Helpers: `orbit_stats`, `family_orbit_report`, `resonance_scan`, `FAMILY_37`, `FAMILY_111`.
+
 ## Tests
 
 ```bash

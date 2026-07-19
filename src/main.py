@@ -37,10 +37,15 @@ import numpy as np
 from src.core import (
     DEFAULT_LABEL_MODULUS,
     DEFAULT_STEP_RADIANS,
+    FAMILY_37,
+    FAMILY_111,
     SUGGESTED_MODULI,
     digital_root,
     doubling_orbit,
+    family_orbit_report,
     modulus_sweep_report,
+    orbit_stats,
+    resonance_scan,
     resolve_moduli,
     step_radians_for,
     vortex_doubling_sequence,
@@ -52,8 +57,10 @@ from src.visualize import (
     generate_default_assets,
     plot_density_heatmap,
     plot_density_modulus_comparison,
+    plot_family_comparison,
     plot_interactive_plotly,
     plot_modulus_comparison,
+    plot_orbit_stats_bars,
     plot_paired_label_orbit,
     plot_torus_modulus_comparison,
     plot_torus_projection,
@@ -189,6 +196,31 @@ def build_parser() -> argparse.ArgumentParser:
         help="Save dual-panel CRT plot (digital root | k%%m | packed) for --modulus",
     )
     p.add_argument(
+        "--orbit-stats",
+        action="store_true",
+        help=(
+            "Print quantitative orbit_stats for --modulus (and both step modes "
+            "if --step-mode not forcing a single run). Use with --family-37 / "
+            "--resonance-scan for tables."
+        ),
+    )
+    p.add_argument(
+        "--family-37",
+        action="store_true",
+        help=(
+            "Dedicated 37-family analysis (37, 111, 333): stats under both step "
+            "modes + circle and torus comparison figures"
+        ),
+    )
+    p.add_argument(
+        "--resonance-scan",
+        action="store_true",
+        help=(
+            "Scan 111-related moduli (3,9,27,37,111,333) for label–angle "
+            "alignment under both step modes; print NMI table and bar chart"
+        ),
+    )
+    p.add_argument(
         "--style",
         type=str,
         default="dark",
@@ -289,6 +321,9 @@ def main(argv: list[str] | None = None) -> int:
             args.demo,
             args.sweep_moduli,
             args.paired_panel,
+            args.orbit_stats,
+            args.family_37,
+            args.resonance_scan,
         ]
     )
     if not actions:
@@ -421,6 +456,193 @@ def main(argv: list[str] | None = None) -> int:
             plt.show()
         else:
             plt.close(fig_p)
+
+    def _print_orbit_table(rows: list[dict], heading: str) -> None:
+        print(f"\n[{heading}]")
+        hdr = (
+            f"  {'m':>5}  {'mode':>12}  {'len×2':>6}  {'cyc':>4}  "
+            f"{'ret_k':>5}  {'ret_d':>7}  {'ent':>5}  {'R':>5}  "
+            f"{'NMI':>6}  {'V':>5}  {'ΔNMI':>6}"
+        )
+        print(hdr)
+        print("  " + "-" * (len(hdr) - 2))
+        for r in rows:
+            delta = r.get("nmi_delta_vs_fixed", float("nan"))
+            delta_s = f"{delta:6.3f}" if delta == delta else f"{'—':>6}"
+            print(
+                f"  {r['modulus']:>5}  {r['step_mode']:>12}  "
+                f"{r['length_from_1']:>6}  {r['num_cycles']:>4}  "
+                f"{r['best_return_k']:>5}  {r['best_return_dist']:>7.4f}  "
+                f"{r['entropy_ratio']:>5.3f}  {r['resultant_length']:>5.3f}  "
+                f"{r['label_angle_nmi']:>6.3f}  {r['label_angle_cramers_v']:>5.3f}  "
+                f"{delta_s}"
+            )
+        print(
+            "  legend: len×2=×2 orbit from 1; cyc=# cycles; ret_k/ret_d=best "
+            "geometric near-return; ent=angular entropy ratio; R=resultant; "
+            "NMI/V=label–angle alignment; ΔNMI = m/π NMI − fixed NMI"
+        )
+
+    if args.orbit_stats and not (args.family_37 or args.resonance_scan):
+        # Single-modulus both modes for a fair comparison
+        rows = family_orbit_report(
+            family=(modulus,),
+            step_modes=("nine_over_pi", "m_over_pi"),
+            num_steps=max(args.num_steps, 400),
+            method=args.method,
+        )
+        # attach delta
+        by_mode = {r["step_mode"]: r for r in rows}
+        if "nine_over_pi" in by_mode and "m_over_pi" in by_mode:
+            d = (
+                by_mode["m_over_pi"]["label_angle_nmi"]
+                - by_mode["nine_over_pi"]["label_angle_nmi"]
+            )
+            by_mode["m_over_pi"]["nmi_delta_vs_fixed"] = d
+            by_mode["nine_over_pi"]["nmi_delta_vs_fixed"] = 0.0
+        _print_orbit_table(rows, f"orbit-stats m={modulus}")
+        out_bar = assets / f"orbit_stats_m{modulus}_nmi.png"
+        fig_b = plot_orbit_stats_bars(
+            rows,
+            metric="label_angle_nmi",
+            style=args.style,
+            save_path=out_bar,
+            title=f"Label–angle NMI · m={modulus}",
+        )
+        print(f"[orbit-stats] bar chart → {out_bar}")
+        if args.show:
+            plt.show()
+        else:
+            plt.close(fig_b)
+
+    if args.family_37:
+        n_stats = max(args.num_steps, 400)
+        rows = family_orbit_report(
+            family="37",
+            step_modes=("nine_over_pi", "m_over_pi"),
+            num_steps=n_stats,
+            method=args.method,
+        )
+        by_key = {(r["modulus"], r["step_mode"]): r for r in rows}
+        for m in FAMILY_37:
+            fixed = by_key.get((m, "nine_over_pi"))
+            coupled = by_key.get((m, "m_over_pi"))
+            if fixed and coupled:
+                coupled["nmi_delta_vs_fixed"] = (
+                    coupled["label_angle_nmi"] - fixed["label_angle_nmi"]
+                )
+                fixed["nmi_delta_vs_fixed"] = 0.0
+        _print_orbit_table(rows, "family-37 orbit stats")
+
+        out_c = assets / "family_37_circle.png"
+        fig_c = plot_family_comparison(
+            family=FAMILY_37,
+            num_steps=max(args.num_steps, 120),
+            method=args.method,
+            style=args.style,
+            view="circle",
+            save_path=out_c,
+        )
+        print(f"[family-37] circle comparison → {out_c}")
+        if args.show:
+            plt.show()
+        else:
+            plt.close(fig_c)
+
+        out_t = assets / "family_37_torus.png"
+        fig_t = plot_family_comparison(
+            family=FAMILY_37,
+            num_steps=max(args.num_steps, 150),
+            method=args.method,
+            style=args.style,
+            view="torus",
+            save_path=out_t,
+        )
+        print(f"[family-37] torus comparison → {out_t}")
+        if args.show:
+            plt.show()
+        else:
+            plt.close(fig_t)
+
+        out_bar = assets / "family_37_nmi.png"
+        fig_b = plot_orbit_stats_bars(
+            rows,
+            metric="label_angle_nmi",
+            style=args.style,
+            save_path=out_bar,
+            title="37-family · label–angle NMI (fixed 9/π vs m/π)",
+        )
+        print(f"[family-37] NMI bars → {out_bar}")
+        if args.show:
+            plt.show()
+        else:
+            plt.close(fig_b)
+
+        out_len = assets / "family_37_return.png"
+        fig_r = plot_orbit_stats_bars(
+            rows,
+            metric="best_return_dist",
+            style=args.style,
+            save_path=out_len,
+            title="37-family · best geometric near-return distance (lower ⇒ closer)",
+        )
+        print(f"[family-37] return-distance bars → {out_len}")
+        if args.show:
+            plt.show()
+        else:
+            plt.close(fig_r)
+
+    if args.resonance_scan:
+        n_stats = max(args.num_steps, 600)
+        rows = resonance_scan(
+            moduli=FAMILY_111,
+            num_steps=n_stats,
+            method=args.method,
+        )
+        _print_orbit_table(rows, "resonance-scan (FAMILY_111)")
+
+        # Rank coupled mode by NMI
+        coupled = [r for r in rows if r["step_mode"] == "m_over_pi"]
+        coupled_sorted = sorted(
+            coupled, key=lambda r: r["label_angle_nmi"], reverse=True
+        )
+        print("\n[resonance-scan] rank by NMI under m/π (higher ⇒ more label–angle lock):")
+        for i, r in enumerate(coupled_sorted, 1):
+            print(
+                f"  {i}. m={r['modulus']:>4}  NMI={r['label_angle_nmi']:.4f}  "
+                f"V={r['label_angle_cramers_v']:.4f}  "
+                f"ΔNMI={r.get('nmi_delta_vs_fixed', float('nan')):+.4f}  "
+                f"×2len={r['length_from_1']}"
+            )
+
+        out_bar = assets / "resonance_scan_111_nmi.png"
+        fig_b = plot_orbit_stats_bars(
+            rows,
+            metric="label_angle_nmi",
+            style=args.style,
+            save_path=out_bar,
+            title="111-family resonance · label–angle NMI",
+        )
+        print(f"[resonance-scan] NMI chart → {out_bar}")
+        if args.show:
+            plt.show()
+        else:
+            plt.close(fig_b)
+
+        out_c = assets / "resonance_scan_111_circle.png"
+        fig_c = plot_family_comparison(
+            family=FAMILY_111,
+            num_steps=max(args.num_steps, 100),
+            method=args.method,
+            style=args.style,
+            view="circle",
+            save_path=out_c,
+        )
+        print(f"[resonance-scan] family circle → {out_c}")
+        if args.show:
+            plt.show()
+        else:
+            plt.close(fig_c)
 
     if args.demo:
         print("\n[demo] Generating default assets…")

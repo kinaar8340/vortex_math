@@ -43,6 +43,12 @@ SUGGESTED_MODULI: tuple[int, ...] = CORE_MODULI  # alias for backward compatibil
 # Extra candidates: 142857 (7), small primes, 3^3, repunit-related 41.
 EXTENDED_MODULI: tuple[int, ...] = (7, 13, 27, 41)
 
+# 37-family: repunit prime, prime-mover composite, CRT product with 9.
+FAMILY_37: tuple[int, ...] = (37, 111, 333)
+
+# 111 / prime-mover motif: factors, powers of 3, and composites around 111.
+FAMILY_111: tuple[int, ...] = (3, 9, 27, 37, 111, 333)
+
 # Full circle
 TWO_PI: float = 2.0 * np.pi
 
@@ -289,6 +295,7 @@ def modulus_sweep_report(
 def resolve_moduli(
     extended: bool = False,
     moduli: Sequence[int] | None = None,
+    family: str | None = None,
 ) -> tuple[int, ...]:
     """Choose modulus list for sweeps.
 
@@ -298,10 +305,22 @@ def resolve_moduli(
         If True and ``moduli`` is None, include :data:`EXTENDED_MODULI`
         (7, 13, 27, 41) after the core set.
     moduli :
-        Explicit list overrides ``extended``.
+        Explicit list overrides ``extended`` / ``family``.
+    family :
+        Named family: ``"37"`` / ``"family_37"`` → :data:`FAMILY_37`;
+        ``"111"`` / ``"family_111"`` → :data:`FAMILY_111`.
     """
     if moduli is not None:
         return tuple(int(m) for m in moduli)
+    if family is not None:
+        key = str(family).strip().lower().replace("-", "_")
+        if key in {"37", "family_37", "m37"}:
+            return tuple(FAMILY_37)
+        if key in {"111", "family_111", "m111", "prime_mover"}:
+            return tuple(FAMILY_111)
+        raise ValueError(
+            f"Unknown family {family!r}. Use '37', '111', or pass explicit moduli."
+        )
     if extended:
         # Preserve order; de-dupe if lists ever overlap.
         seen: set[int] = set()
@@ -312,6 +331,316 @@ def resolve_moduli(
                 out.append(m)
         return tuple(out)
     return tuple(CORE_MODULI)
+
+
+# ---------------------------------------------------------------------------
+# Quantitative orbit analysis
+# ---------------------------------------------------------------------------
+
+
+def geometric_return_stats(
+    step_radians: float,
+    num_steps: int = 500,
+) -> dict:
+    """How close the pure geometric orbit returns toward the start angle.
+
+    For step ``Δθ``, after ``k`` hops the fractional turn is
+    ``{k · Δθ / 2π}``. Distance to a full-turn return is
+    ``min(f, 1-f)``. Irrational rotations never hit exactly 0; smaller
+    best distance ⇒ stronger near-return / quasi-period.
+
+    Returns
+    -------
+    dict
+        ``best_return_k``, ``best_return_dist`` (in [0, 0.5] of a turn),
+        ``best_return_angle_err`` (radians), ``mean_return_dist``,
+        ``rotation_number`` (= Δθ / 2π).
+    """
+    if num_steps < 1:
+        raise ValueError("num_steps must be >= 1")
+    k = np.arange(1, num_steps + 1, dtype=float)
+    fracs = np.mod(k * float(step_radians) / TWO_PI, 1.0)
+    dist = np.minimum(fracs, 1.0 - fracs)
+    best_i = int(np.argmin(dist))
+    best_dist = float(dist[best_i])
+    return {
+        "best_return_k": best_i + 1,
+        "best_return_dist": best_dist,
+        "best_return_angle_err": best_dist * TWO_PI,
+        "mean_return_dist": float(np.mean(dist)),
+        "rotation_number": float(step_radians) / TWO_PI,
+        "num_steps": int(num_steps),
+    }
+
+
+def angular_sector_stats(
+    angles: np.ndarray,
+    n_bins: int = 36,
+) -> dict:
+    """Uniformity of an angle sample on the circle.
+
+    Metrics
+    -------
+    chi2_uniform :
+        χ² vs equal bin counts (lower ⇒ flatter fill).
+    entropy_ratio :
+        Shannon entropy of the histogram / log(n_bins) ∈ [0, 1]
+        (1 ⇒ perfectly flat occupancy among used bins scale).
+    max_min_ratio :
+        max(bin) / max(min(bin), 1) — large ⇒ clumpy.
+    resultant_length :
+        Rayleigh ``R = |mean e^{iθ}|`` ∈ [0, 1] (0 ⇒ more uniform).
+    empty_bins :
+        Number of bins with zero visits.
+    """
+    if n_bins < 2:
+        raise ValueError("n_bins must be >= 2")
+    ang = np.asarray(angles, dtype=float)
+    if ang.size == 0:
+        raise ValueError("angles must be non-empty")
+    hist, _ = np.histogram(ang, bins=n_bins, range=(0.0, TWO_PI))
+    n = float(ang.size)
+    expected = n / float(n_bins)
+    chi2 = float(np.sum((hist.astype(float) - expected) ** 2 / expected))
+    p = hist.astype(float) / n
+    p_nz = p[p > 0]
+    entropy = float(-np.sum(p_nz * np.log(p_nz)))
+    max_h = float(np.log(n_bins))
+    entropy_ratio = entropy / max_h if max_h > 0 else 0.0
+    hmin = int(hist.min())
+    hmax = int(hist.max())
+    max_min_ratio = float(hmax) / float(max(hmin, 1))
+    # Circular mean resultant length
+    c = float(np.mean(np.cos(ang)))
+    s = float(np.mean(np.sin(ang)))
+    resultant = float(np.hypot(c, s))
+    return {
+        "n_bins": int(n_bins),
+        "chi2_uniform": chi2,
+        "entropy_ratio": entropy_ratio,
+        "max_min_ratio": max_min_ratio,
+        "resultant_length": resultant,
+        "empty_bins": int(np.sum(hist == 0)),
+        "bin_counts": hist.tolist(),
+    }
+
+
+def label_angle_alignment(
+    labels: np.ndarray,
+    angles: np.ndarray,
+    n_angle_bins: int = 18,
+) -> dict:
+    """Association between discrete labels and angular sectors.
+
+    Builds a contingency table (label × angle-bin) and reports:
+    - normalized mutual information (NMI) in [0, 1]
+    - Cramér's V association in [0, 1]
+
+    Higher values mean labels are more locked to angular position
+    (resonance / co-structure). Near 0 means labels and angles mix freely.
+    """
+    labs = np.asarray(labels)
+    ang = np.asarray(angles, dtype=float)
+    if labs.size != ang.size or labs.size == 0:
+        raise ValueError("labels and angles must be same non-zero length")
+
+    # Map labels to dense row indices
+    uniq, inv = np.unique(labs, return_inverse=True)
+    n_lab = int(uniq.size)
+    angle_bins = np.floor(np.mod(ang, TWO_PI) / TWO_PI * n_angle_bins).astype(int)
+    angle_bins = np.clip(angle_bins, 0, n_angle_bins - 1)
+
+    table = np.zeros((n_lab, n_angle_bins), dtype=float)
+    for i, b in zip(inv, angle_bins):
+        table[i, b] += 1.0
+
+    n = float(labs.size)
+    row = table.sum(axis=1, keepdims=True)
+    col = table.sum(axis=0, keepdims=True)
+    # Mutual information
+    mi = 0.0
+    for i in range(n_lab):
+        for j in range(n_angle_bins):
+            if table[i, j] <= 0:
+                continue
+            p_ij = table[i, j] / n
+            p_i = row[i, 0] / n
+            p_j = col[0, j] / n
+            if p_i > 0 and p_j > 0:
+                mi += p_ij * float(np.log(p_ij / (p_i * p_j)))
+    # Entropies for NMI
+    p_row = (row.ravel() / n)
+    p_row = p_row[p_row > 0]
+    h_lab = float(-np.sum(p_row * np.log(p_row)))
+    p_col = (col.ravel() / n)
+    p_col = p_col[p_col > 0]
+    h_ang = float(-np.sum(p_col * np.log(p_col)))
+    denom = max(h_lab, h_ang, 1e-15)
+    nmi = float(mi / denom)
+
+    # Cramér's V
+    expected = row @ col / n
+    with np.errstate(divide="ignore", invalid="ignore"):
+        chi2 = np.nansum((table - expected) ** 2 / np.where(expected > 0, expected, np.nan))
+    k = min(n_lab, n_angle_bins)
+    cramer_v = float(np.sqrt(chi2 / (n * max(k - 1, 1)))) if n > 0 else 0.0
+
+    return {
+        "n_labels": n_lab,
+        "n_angle_bins": int(n_angle_bins),
+        "mutual_information": float(mi),
+        "nmi": nmi,
+        "cramers_v": cramer_v,
+        "chi2_independence": float(chi2) if np.isfinite(chi2) else 0.0,
+    }
+
+
+def orbit_stats(
+    modulus: int = DEFAULT_LABEL_MODULUS,
+    step_mode: StepMode | str = "nine_over_pi",
+    num_steps: int = 500,
+    n_bins: int = 36,
+    method: str = "step_index",
+    explicit_step: float | None = None,
+) -> dict:
+    """Quantitative report for one (modulus, step_mode) experiment.
+
+    Combines:
+    - algebraic ×2 structure on ``Z/mZ``
+    - geometric near-return of the irrational (or rational) rotation
+    - angular fill uniformity
+    - label–angle alignment (resonance proxy)
+
+    Parameters
+    ----------
+    modulus :
+        Labeling modulus (and m for ``m_over_pi`` step).
+    step_mode :
+        ``nine_over_pi`` or ``m_over_pi``.
+    num_steps :
+        Orbit length for geometric / label statistics.
+    n_bins :
+        Angular histogram bins for uniformity.
+    method :
+        Label mapping method (same as plots).
+    explicit_step :
+        Optional override for arc step (radians).
+    """
+    if modulus <= 0:
+        raise ValueError(f"modulus must be positive, got {modulus}")
+    if num_steps < 1:
+        raise ValueError("num_steps must be >= 1")
+
+    step = step_radians_for(modulus, step_mode=step_mode, explicit=explicit_step)
+    structure = doubling_cycle_structure(modulus)
+    angles = circle_angles(num_steps, step)
+    labels = labels_for_orbit(
+        num_steps, step_radians=step, method=method, modulus=modulus
+    )
+    geo = geometric_return_stats(step, num_steps=num_steps)
+    sector = angular_sector_stats(angles, n_bins=n_bins)
+    align = label_angle_alignment(labels, angles, n_angle_bins=max(9, n_bins // 2))
+
+    # Label visit balance (how evenly residues appear)
+    lab_unique, lab_counts = np.unique(labels, return_counts=True)
+    lab_p = lab_counts.astype(float) / float(num_steps)
+    lab_entropy = float(-np.sum(lab_p * np.log(lab_p))) if lab_p.size else 0.0
+    lab_max_ent = float(np.log(max(lab_unique.size, 1)))
+    label_entropy_ratio = lab_entropy / lab_max_ent if lab_max_ent > 0 else 0.0
+
+    return {
+        "modulus": int(modulus),
+        "step_mode": str(step_mode),
+        "step_radians": float(step),
+        "num_steps": int(num_steps),
+        "method": method,
+        # Algebraic
+        "length_from_1": structure["length_from_1"],
+        "num_cycles": structure["num_cycles"],
+        "cycle_lengths": structure["cycle_lengths"],
+        # Geometry
+        "rotation_number": geo["rotation_number"],
+        "best_return_k": geo["best_return_k"],
+        "best_return_dist": geo["best_return_dist"],
+        "best_return_angle_err": geo["best_return_angle_err"],
+        "mean_return_dist": geo["mean_return_dist"],
+        # Fill
+        "chi2_uniform": sector["chi2_uniform"],
+        "entropy_ratio": sector["entropy_ratio"],
+        "max_min_ratio": sector["max_min_ratio"],
+        "resultant_length": sector["resultant_length"],
+        "empty_bins": sector["empty_bins"],
+        # Resonance / co-structure
+        "label_angle_nmi": align["nmi"],
+        "label_angle_cramers_v": align["cramers_v"],
+        "label_entropy_ratio": label_entropy_ratio,
+        "n_distinct_labels": int(lab_unique.size),
+    }
+
+
+def family_orbit_report(
+    family: Sequence[int] | str = "37",
+    step_modes: Sequence[str] = ("nine_over_pi", "m_over_pi"),
+    num_steps: int = 500,
+    n_bins: int = 36,
+    method: str = "step_index",
+) -> list[dict]:
+    """``orbit_stats`` for each modulus × step_mode (default: 37-family)."""
+    if isinstance(family, str):
+        moduli = resolve_moduli(family=family)
+    else:
+        moduli = tuple(int(m) for m in family)
+    rows: list[dict] = []
+    for mode in step_modes:
+        for m in moduli:
+            rows.append(
+                orbit_stats(
+                    modulus=m,
+                    step_mode=mode,
+                    num_steps=num_steps,
+                    n_bins=n_bins,
+                    method=method,
+                )
+            )
+    return rows
+
+
+def resonance_scan(
+    moduli: Sequence[int] | None = None,
+    num_steps: int = 800,
+    n_bins: int = 36,
+    method: str = "step_index",
+) -> list[dict]:
+    """Compare label–angle co-structure for 111-related (or given) moduli.
+
+    For each modulus, runs both step modes and ranks by
+    ``label_angle_nmi`` under ``m_over_pi`` (stronger ⇒ more resonance
+    between modular labels and the coupled winding).
+
+    Default moduli: :data:`FAMILY_111`.
+    """
+    if moduli is None:
+        moduli = FAMILY_111
+    rows = family_orbit_report(
+        family=tuple(int(m) for m in moduli),
+        step_modes=("nine_over_pi", "m_over_pi"),
+        num_steps=num_steps,
+        n_bins=n_bins,
+        method=method,
+    )
+    # Annotate delta NMI: m_over_pi − nine_over_pi for same m
+    by_key: dict[tuple[int, str], dict] = {
+        (r["modulus"], r["step_mode"]): r for r in rows
+    }
+    for m in moduli:
+        m_i = int(m)
+        fixed = by_key.get((m_i, "nine_over_pi"))
+        coupled = by_key.get((m_i, "m_over_pi"))
+        if fixed and coupled:
+            delta = coupled["label_angle_nmi"] - fixed["label_angle_nmi"]
+            coupled["nmi_delta_vs_fixed"] = float(delta)
+            fixed["nmi_delta_vs_fixed"] = 0.0
+    return rows
 
 
 def step_radians_for(

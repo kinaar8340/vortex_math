@@ -2059,6 +2059,188 @@ def plot_paired_label_orbit(
     return fig
 
 
+def plot_family_comparison(
+    family: Sequence[int] | None = None,
+    num_steps: int = 150,
+    method: str = "step_index",
+    style: Literal["dark", "light"] = "dark",
+    view: Literal["circle", "torus"] = "circle",
+    save_path: str | Path | None = None,
+) -> Figure:
+    """Compare a modulus family under both step modes (rows) × moduli (cols).
+
+    Default family is the 37-chain: 37, 111, 333. Top row: fixed 9/π.
+    Bottom row: m/π. Use ``view="torus"`` to watch 3-lobed winding evolve.
+    """
+    from .core import FAMILY_37
+
+    if family is None:
+        family = list(FAMILY_37)
+    moduli = [int(m) for m in family]
+    n = len(moduli)
+    modes = ("nine_over_pi", "m_over_pi")
+    apply_style(style)
+    colors_meta = apply_style(style)
+
+    if view == "circle":
+        fig, axes = plt.subplots(2, n, figsize=(4.0 * n, 7.5), squeeze=False)
+        th = np.linspace(0, TWO_PI, 400)
+        cx, cy = np.cos(th), np.sin(th)
+        for row, mode in enumerate(modes):
+            for col, m in enumerate(moduli):
+                ax = axes[row, col]
+                step_m = step_radians_for(m, step_mode=mode)
+                x, y = circle_positions(num_steps, step_m)
+                labels = labels_for_orbit(
+                    num_steps, step_m, method=method, modulus=m
+                )
+                vmin, vmax = _label_vmin_vmax(labels, m, method=method)
+                ax.plot(cx, cy, color=colors_meta["grid"], lw=0.8, alpha=0.7)
+                sc = ax.scatter(
+                    x,
+                    y,
+                    c=labels,
+                    cmap=label_colormap(m, method=method),
+                    vmin=vmin,
+                    vmax=vmax,
+                    s=16,
+                    edgecolors="none",
+                    alpha=0.9,
+                    zorder=5,
+                )
+                ax.set_aspect("equal")
+                ax.set_xlim(-1.12, 1.12)
+                ax.set_ylim(-1.12, 1.12)
+                ax.set_xticks([])
+                ax.set_yticks([])
+                mode_short = "9/π" if mode == "nine_over_pi" else "m/π"
+                ax.set_title(f"m={m} · {mode_short}\nΔθ≈{step_m:.3f}", fontsize=9)
+                if col == n - 1:
+                    fig.colorbar(sc, ax=ax, fraction=0.046, pad=0.02)
+        fig.suptitle(
+            f"Family comparison · view=circle · method={method} · n={num_steps}",
+            fontsize=11,
+        )
+    else:
+        fig = plt.figure(figsize=(4.0 * n, 7.2))
+        for row, mode in enumerate(modes):
+            for col, m in enumerate(moduli):
+                ax = fig.add_subplot(2, n, row * n + col + 1, projection="3d")
+                step_m = step_radians_for(m, step_mode=mode)
+                x, y, z = _torus_orbit_coords(num_steps, step_m, 2.5, 1.0, phi_scale=3.0)
+                labels = labels_for_orbit(
+                    num_steps, step_m, method=method, modulus=m
+                )
+                vmin, vmax = _label_vmin_vmax(labels, m, method=method)
+                wire = "black" if style == "dark" else "#1a1a1a"
+                _draw_torus_wireframe(
+                    ax,
+                    2.5,
+                    1.0,
+                    color=wire,
+                    linewidth=0.35,
+                    alpha=0.22,
+                    n_u=24,
+                    n_v=12,
+                    rstride=3,
+                    cstride=3,
+                )
+                ax.plot(x, y, z, color="#888", lw=0.45, alpha=0.35)
+                ax.scatter(
+                    x,
+                    y,
+                    z,
+                    c=labels,
+                    cmap=label_colormap(m, method=method),
+                    vmin=vmin,
+                    vmax=vmax,
+                    s=8,
+                    alpha=0.9,
+                    edgecolors="none",
+                    depthshade=False,
+                )
+                ax.view_init(elev=90, azim=0)
+                ax.set_axis_off()
+                mode_short = "9/π" if mode == "nine_over_pi" else "m/π"
+                ax.set_title(f"m={m} · {mode_short}", fontsize=9)
+        fig.suptitle(
+            f"Family comparison · view=torus · method={method} · n={num_steps}",
+            fontsize=11,
+        )
+
+    fig.tight_layout()
+    if save_path is not None:
+        path = Path(save_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+    return fig
+
+
+def plot_orbit_stats_bars(
+    rows: Sequence[dict],
+    metric: str = "label_angle_nmi",
+    style: Literal["dark", "light"] = "dark",
+    save_path: str | Path | None = None,
+    title: str | None = None,
+) -> Figure:
+    """Bar chart of one orbit_stats metric grouped by modulus and step mode."""
+    colors_meta = apply_style(style)
+    # Group by modulus
+    moduli = []
+    seen: set[int] = set()
+    for r in rows:
+        m = int(r["modulus"])
+        if m not in seen:
+            seen.add(m)
+            moduli.append(m)
+
+    modes = []
+    for r in rows:
+        sm = r["step_mode"]
+        if sm not in modes:
+            modes.append(sm)
+
+    x = np.arange(len(moduli), dtype=float)
+    width = 0.35 if len(modes) > 1 else 0.55
+    fig, ax = plt.subplots(figsize=(max(6.0, 1.4 * len(moduli)), 4.2))
+    palette = ["#58a6ff", "#f778ba", "#3fb950", "#d29922"]
+
+    for i, mode in enumerate(modes):
+        vals = []
+        for m in moduli:
+            match = next(
+                (r[metric] for r in rows if r["modulus"] == m and r["step_mode"] == mode),
+                0.0,
+            )
+            vals.append(float(match))
+        offset = (i - (len(modes) - 1) / 2) * width
+        label = "9/π fixed" if mode == "nine_over_pi" else "m/π coupled"
+        ax.bar(
+            x + offset,
+            vals,
+            width=width * 0.95,
+            label=label,
+            color=palette[i % len(palette)],
+            edgecolor=colors_meta["grid"],
+        )
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([str(m) for m in moduli])
+    ax.set_xlabel("modulus m")
+    ax.set_ylabel(metric)
+    ax.legend(framealpha=0.3)
+    ax.grid(True, axis="y", alpha=0.25)
+    if title is None:
+        title = f"Orbit metric: {metric}"
+    ax.set_title(title, fontsize=11)
+    fig.tight_layout()
+    if save_path is not None:
+        path = Path(save_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+    return fig
+
+
 def generate_default_assets(assets_dir: str | Path | None = None) -> dict[str, Path]:
     """Generate the key static visualizations into ``assets/``."""
     out = _ensure_assets_dir(assets_dir)
