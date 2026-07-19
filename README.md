@@ -323,13 +323,15 @@ Once the base visualizations are working, iterate with prompts like:
 - “Rodin-coil inspired multi-winding on a torus with 3-6-9 highlighted as a poloidal axis.”
 - “Export SVG layers for print / laser (number circle + orbit separately).”
 
-## Research note
+## Research note & book section
 
-A short, citable summary of the three-layer results (algebra vs progression vs exNMI lock, plus the `angle_bin` control) is in:
+| Doc | Role |
+|-----|------|
+| **[docs/book_section_modulus_invariants.md](docs/book_section_modulus_invariants.md)** | Book-ready prose + figure |
+| **[docs/RESEARCH_NOTE_moduli.md](docs/RESEARCH_NOTE_moduli.md)** | Full experimental backing |
+| **`assets/book_figure_three_layers.png`** | Composite figure (algebra · flow · control) |
 
-**[docs/RESEARCH_NOTE_moduli.md](docs/RESEARCH_NOTE_moduli.md)**
-
-Use that when referencing this work from the main 111 / book project.
+Use those when referencing this work from the main 111 / book project.
 
 ## License / context
 

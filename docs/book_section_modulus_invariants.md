@@ -24,7 +24,17 @@ When the rotational step itself is *coupled* to the modulus (\(\Delta\theta = m/
 
 Only one labeling method creates a genuine *statistical* dependence between label and actual geometric angle: explicit angular binning (`angle_bin`). Under the default sequential method (`step_index`), which assigns labels according to the step count and its digital root or modular residue, normalized mutual information between labels and angles remains at or below chance levels once a proper null model—label shuffling with the same marginals—is applied.
 
-Apparent visual symmetry in the resulting plots therefore reflects **orderly sequential progression**, not a hidden locking of labels to preferred angles on the circle. That is exactly what one should expect from an irrational rotation labeled by step index: the flow has no preferred angles unless the labeling method introduces angular bins by construction.
+Apparent visual symmetry in the resulting plots therefore reflects **orderly sequential progression**, not a hidden locking of labels to preferred angles on the circle. That outcome is precisely what one should expect from an irrational rotation labeled by step index: the orbit has no preferred angles unless the labeling method itself introduces angular bins by construction.
+
+---
+
+**Figure.** *Three invariants of modulus on an irrational rotation.*  
+(a) Algebraic cleanness: \(m=37\), fixed step \(9/\pi\), sequential labels—long clean \(\times 2\) structure (length 36, two cycles).  
+(b) Orderly label flow: \(m=111\), coupled step \(m/\pi\), sequential labels—higher label-progression along the orbit.  
+(c)–(d) Positive control pair at \(m=37\), fixed step \(9/\pi\): sequential labeling (c) yields excess NMI at or below the shuffle null; angular binning (d) yields strongly positive excess NMI. Visual order under step-index is progression, not positional lock.  
+*Source file:* `assets/book_figure_three_layers.png`.
+
+![Three layers: algebra, progression, and angle-lock control](../assets/book_figure_three_layers.png)
 
 ---
 
@@ -34,7 +44,7 @@ The practical consequence is concise:
 
 > **Modulus changes the algebraic and sequential-label invariants; it does not create angle–label locking on an irrational rotation unless you label by angle itself.**
 
-This statement distinguishes the synchronicity that arises from composite number structure—notably **111** as prime-mover composite \(3 \times 37\)—from stronger geometric claims that would require explicit angular construction. Algebra crowns 37; coupled progression often crowns 111; positional lock belongs only to methods that bin by angle. The full experimental record, metrics, control tables, and implementation details are recorded in the accompanying research note.[^note]
+This statement distinguishes the synchronicity that arises from composite number structure—notably **111** as prime-mover composite \(3 \times 37\)—from stronger geometric claims that would require explicit angular construction. Algebra crowns 37; coupled progression frequently crowns 111 under the \(m/\pi\) regime; true positional locking belongs only to labeling methods that bin explicitly by angle. The full experimental record, metrics, control tables, and implementation details are recorded in the accompanying research note.[^note]
 
 ---
 
