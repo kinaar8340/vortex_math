@@ -35,7 +35,15 @@ if "--show" not in sys.argv:
 import matplotlib.pyplot as plt
 import numpy as np
 
-from src.core import DEFAULT_STEP_RADIANS, digital_root, vortex_doubling_sequence
+from src.core import (
+    DEFAULT_LABEL_MODULUS,
+    DEFAULT_STEP_RADIANS,
+    SUGGESTED_MODULI,
+    digital_root,
+    doubling_orbit,
+    modulus_sweep_report,
+    vortex_doubling_sequence,
+)
 from src.visualize import (
     DEFAULT_ASSETS_DIR,
     animate_circle_steps,
@@ -43,6 +51,7 @@ from src.visualize import (
     generate_default_assets,
     plot_density_heatmap,
     plot_interactive_plotly,
+    plot_modulus_comparison,
     plot_torus_projection,
     plot_unit_circle_with_steps,
     plot_vortex_flow_on_circle,
@@ -115,8 +124,26 @@ def build_parser() -> argparse.ArgumentParser:
         "--method",
         type=str,
         default="step_index",
-        choices=["step_index", "angle_bin", "sin_dr", "cos_dr", "doubling_cycle"],
-        help="Angle/index → vortex digit mapping",
+        choices=["step_index", "angle_bin", "sin_dr", "cos_dr", "doubling_cycle", "mod"],
+        help="Angle/index → label mapping",
+    )
+    p.add_argument(
+        "--modulus",
+        "-m",
+        type=int,
+        default=DEFAULT_LABEL_MODULUS,
+        help=(
+            "Labeling modulus only (geometry stays 9/π unless --step is set). "
+            "Try 9, 37, 111, 333."
+        ),
+    )
+    p.add_argument(
+        "--sweep-moduli",
+        action="store_true",
+        help=(
+            "Print doubling-cycle structure for suggested moduli "
+            f"{list(SUGGESTED_MODULI)} and save a side-by-side comparison plot"
+        ),
     )
     p.add_argument(
         "--style",
@@ -218,16 +245,47 @@ def main(argv: list[str] | None = None) -> int:
             args.animate,
             args.interactive,
             args.demo,
+            args.sweep_moduli,
         ]
     )
     if not actions:
         args.demo = True
 
+    modulus = int(args.modulus)
+    if modulus <= 0:
+        print("error: --modulus must be positive", file=sys.stderr)
+        return 2
+
     print("Vortex Math Unit Circle")
     print(f"  step = {step:.8f} rad  (default 9/π ≈ {DEFAULT_STEP_RADIANS:.8f})")
-    print(f"  doubling cycle sample: {vortex_doubling_sequence(12)}")
+    print(f"  label modulus m = {modulus}  (geometry independent of m)")
+    print(f"  doubling cycle sample (m=9): {vortex_doubling_sequence(12)}")
+    orbit_m, len_m = doubling_orbit(1, modulus)
+    print(f"  ×2 orbit from 1 mod {modulus}: len={len_m}  prefix={orbit_m[:12]}")
     print(f"  digital_root(247) = {digital_root(247)}")
     print(f"  assets → {assets.resolve()}")
+
+    if args.sweep_moduli:
+        print("\n[sweep-moduli] Doubling structure (×2 on Z/mZ):")
+        print(f"  {'m':>6}  {'len_from_1':>10}  {'num_cycles':>10}  {'cycle_lengths'}")
+        for row in modulus_sweep_report():
+            print(
+                f"  {row['modulus']:>6}  {row['length_from_1']:>10}  "
+                f"{row['num_cycles']:>10}  {row['cycle_lengths']}"
+            )
+        out = Path(args.out) if args.out else assets / "modulus_comparison.png"
+        fig = plot_modulus_comparison(
+            num_steps=max(args.num_steps, 100),
+            step=step,
+            method=args.method,
+            style=args.style,
+            save_path=out,
+        )
+        print(f"[sweep-moduli] comparison plot → {out}")
+        if args.show:
+            plt.show()
+        else:
+            plt.close(fig)
 
     if args.demo:
         print("\n[demo] Generating default assets…")
@@ -236,11 +294,14 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {name}: {path}")
 
     if args.plot_steps:
-        out = Path(args.out) if args.out else assets / "unit_circle_steps.png"
+        out = Path(args.out) if args.out else assets / f"unit_circle_steps_m{modulus}.png"
+        if args.out is None and modulus == DEFAULT_LABEL_MODULUS:
+            out = assets / "unit_circle_steps.png"
         fig = plot_unit_circle_with_steps(
             num_steps=args.num_steps,
             step=step,
             method=args.method,
+            modulus=modulus,
             style=args.style,
             save_path=out,
         )
@@ -256,6 +317,7 @@ def main(argv: list[str] | None = None) -> int:
             num_steps=args.num_steps,
             step=step,
             method=args.method,
+            modulus=modulus,
             style=args.style,
             save_path=out,
         )
@@ -280,11 +342,14 @@ def main(argv: list[str] | None = None) -> int:
             plt.close(fig)
 
     if args.torus:
-        out = Path(args.out) if args.out else assets / "torus_projection.png"
+        out = Path(args.out) if args.out else assets / f"torus_projection_m{modulus}.png"
+        if args.out is None and modulus == DEFAULT_LABEL_MODULUS:
+            out = assets / "torus_projection.png"
         fig = plot_torus_projection(
             num_steps=args.num_steps,
             step=step,
             method=args.method,
+            modulus=modulus,
             style=args.style,
             save_path=out,
         )
@@ -316,7 +381,7 @@ def main(argv: list[str] | None = None) -> int:
 
         print(
             f"[animate-torus] mode={args.mode} steps={args.num_steps} "
-            f"fps={args.fps} resolution={resolution} encoder={args.encoder}"
+            f"fps={args.fps} resolution={resolution} encoder={args.encoder} m={modulus}"
         )
         print(
             "  sequence: (1) construct all steps → "
@@ -326,6 +391,7 @@ def main(argv: list[str] | None = None) -> int:
             num_steps=args.num_steps,
             step=step,
             method=args.method,
+            modulus=modulus,
             style=args.style,
             frames=args.frames,
             fps=args.fps,
@@ -348,6 +414,7 @@ def main(argv: list[str] | None = None) -> int:
             num_steps=args.num_steps,
             step=step,
             method=args.method,
+            modulus=modulus,
             interval=args.interval,
             style=args.style,
             save_gif=args.save_gif or not args.save_mp4,
@@ -367,6 +434,7 @@ def main(argv: list[str] | None = None) -> int:
             num_steps=args.num_steps,
             step=step,
             method=args.method,
+            modulus=modulus,
             save_html=out,
         )
         print(f"[interactive] open in browser → {out}")

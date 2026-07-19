@@ -136,12 +136,36 @@ fig = plot_unit_circle_with_steps(num_steps=100, save_path="assets/out.png")
 
 ### Mapping methods (`--method`)
 
-- `step_index` (default) — digital root of the step index (step 0 → 9)
-- `angle_bin` — nine equal arcs: `floor((θ/2π)·9)+1`
-- `sin_dr` / `cos_dr` — digital root of scaled `|sin θ|` / `|cos θ|`
-- `doubling_cycle` — cycle 1-2-4-8-7-5 by step index
+- `step_index` (default) — digital root of the step index when `m=9` (step 0 → 9); else `k % m`
+- `mod` — always plain `k % m` (no digital-root special case)
+- `angle_bin` — `m` equal arcs (1–9 when `m=9`, else 0…m−1)
+- `sin_dr` / `cos_dr` — digital root or modular map of scaled `|sin θ|` / `|cos θ|`
+- `doubling_cycle` — ×2 orbit mod `m` by step index (classic 1-2-4-8-7-5 when `m=9`)
 
 Register custom mappings with `core.register_mapping(name, fn)`.
+
+### Labeling modulus (`--modulus` / `-m`)
+
+Geometric step stays **`9/π`** by default. Only the **label** set changes with `m`:
+
+```bash
+# Classic vortex digits
+python src/main.py --plot-steps --modulus 9
+
+# Full-period doubling vortex (2 is a primitive root mod 37)
+python src/main.py --plot-steps -m 37 --num-steps 150
+
+# Prime-mover composite (3×37)
+python src/main.py --plot-steps -m 111
+
+# CRT product 9×37
+python src/main.py --plot-steps -m 333
+
+# Sweep structure + side-by-side comparison (9, 37, 111, 333)
+python src/main.py --sweep-moduli --num-steps 120
+```
+
+Core helpers: `doubling_orbit`, `modular_label`, `doubling_cycle_structure`, `labels_for_orbit`.
 
 ## Tests
 

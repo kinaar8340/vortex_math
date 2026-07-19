@@ -6,23 +6,35 @@ and the special role of 3-6-9).
 """
 
 from .core import (
-    digital_root,
-    vortex_doubling_sequence,
-    circle_positions,
-    position_to_vortex_digit,
-    VORTEX_CYCLE,
-    TRINITY_DIGITS,
+    DEFAULT_LABEL_MODULUS,
     DEFAULT_STEP_RADIANS,
+    SUGGESTED_MODULI,
+    TRINITY_DIGITS,
+    VORTEX_CYCLE,
+    circle_positions,
+    digital_root,
+    doubling_orbit,
+    labels_for_orbit,
+    modular_label,
+    position_to_label,
+    position_to_vortex_digit,
+    vortex_doubling_sequence,
 )
 
 __all__ = [
-    "digital_root",
-    "vortex_doubling_sequence",
-    "circle_positions",
-    "position_to_vortex_digit",
-    "VORTEX_CYCLE",
-    "TRINITY_DIGITS",
+    "DEFAULT_LABEL_MODULUS",
     "DEFAULT_STEP_RADIANS",
+    "SUGGESTED_MODULI",
+    "TRINITY_DIGITS",
+    "VORTEX_CYCLE",
+    "circle_positions",
+    "digital_root",
+    "doubling_orbit",
+    "labels_for_orbit",
+    "modular_label",
+    "position_to_label",
+    "position_to_vortex_digit",
+    "vortex_doubling_sequence",
 ]
 
 __version__ = "0.1.0"

@@ -14,7 +14,7 @@ dense rotations on the circle), long orbits fill the circumference densely.
 
 from __future__ import annotations
 
-from typing import Callable, Literal
+from typing import Callable, Literal, Sequence
 
 import numpy as np
 
@@ -32,6 +32,13 @@ TRINITY_DIGITS: frozenset[int] = frozenset({3, 6, 9})
 # (9 related to digital-root base; π ties the circle's geometry.)
 DEFAULT_STEP_RADIANS: float = 9.0 / np.pi
 
+# Labeling modulus (independent of geometric step size).
+# Step stays 9/π by default; only residue / bin labels change with m.
+DEFAULT_LABEL_MODULUS: int = 9
+
+# High-signal moduli for sweeps (digit sum, R_3 factor, prime mover, CRT product).
+SUGGESTED_MODULI: tuple[int, ...] = (9, 37, 111, 333)
+
 # Full circle
 TWO_PI: float = 2.0 * np.pi
 
@@ -41,6 +48,7 @@ MappingMethod = Literal[
     "sin_dr",
     "cos_dr",
     "doubling_cycle",
+    "mod",
 ]
 
 
@@ -109,6 +117,134 @@ def vortex_doubling_sequence(length: int = 100) -> list[int]:
     return [cycle[i % len(cycle)] for i in range(length)]
 
 
+def modular_label(k: int, modulus: int = DEFAULT_LABEL_MODULUS) -> int:
+    """Plain modular residue of ``k`` — the flexible labeling primitive.
+
+    Returns ``k % modulus`` in ``{0, 1, …, modulus - 1}``. This is the
+    natural label when the digit-sum story of mod 9 no longer applies.
+
+    Parameters
+    ----------
+    k :
+        Integer to reduce (step index, scaled value, …).
+    modulus :
+        Positive modulus ``m``.
+
+    Returns
+    -------
+    int
+        Residue in ``0 .. m-1``.
+    """
+    if modulus <= 0:
+        raise ValueError(f"modulus must be positive, got {modulus}")
+    if not isinstance(k, (int, np.integer)):
+        raise TypeError(f"modular_label expects int, got {type(k).__name__}")
+    return int(k) % int(modulus)
+
+
+def doubling_orbit(
+    start: int = 1,
+    modulus: int = DEFAULT_LABEL_MODULUS,
+    max_steps: int | None = None,
+) -> tuple[list[int], int]:
+    """Generalized vortex doubling circuit: ``x → 2x (mod m)``.
+
+    Walks from ``start`` until a residue repeats (cycle detected) or
+    ``max_steps`` is hit. Classic vortex is ``modulus=9, start=1`` →
+    ``[1, 2, 4, 8, 7, 5]`` with cycle length 6. For ``modulus=37`` and
+    start 1, 2 is a primitive root so the orbit has length 36.
+
+    Parameters
+    ----------
+    start :
+        Initial residue.
+    modulus :
+        Positive modulus ``m``.
+    max_steps :
+        Optional hard cap (default ``m + 1``, enough to detect any cycle).
+
+    Returns
+    -------
+    orbit, cycle_length :
+        List of distinct residues until first repeat, and ``len(orbit)``
+        when a cycle closes (or the truncated length if capped).
+    """
+    if modulus <= 0:
+        raise ValueError(f"modulus must be positive, got {modulus}")
+    if max_steps is None:
+        max_steps = int(modulus) + 1
+    if max_steps < 0:
+        raise ValueError("max_steps must be non-negative")
+
+    seen: dict[int, int] = {}
+    steps: list[int] = []
+    x = modular_label(start, modulus)
+    for i in range(max_steps):
+        if x in seen:
+            break
+        seen[x] = i
+        steps.append(x)
+        x = (2 * x) % modulus
+    return steps, len(steps)
+
+
+def doubling_cycle_structure(modulus: int = DEFAULT_LABEL_MODULUS) -> dict:
+    """Full cycle decomposition of multiplication-by-2 on ``Z/mZ``.
+
+    Useful when sweeping moduli: reports every orbit, its length, and
+    whether residue 0 is a fixed point (always ``0 → 0``).
+
+    Parameters
+    ----------
+    modulus :
+        Positive modulus ``m``.
+
+    Returns
+    -------
+    dict
+        Keys: ``modulus``, ``cycles`` (list of residue lists, each a
+        full cycle), ``cycle_lengths``, ``num_cycles``, ``orbit_from_1``
+        (transient+cycle walk from 1), ``length_from_1``.
+    """
+    if modulus <= 0:
+        raise ValueError(f"modulus must be positive, got {modulus}")
+
+    visited: set[int] = set()
+    cycles: list[list[int]] = []
+
+    for seed in range(modulus):
+        if seed in visited:
+            continue
+        # Follow until we hit a known residue or close a loop.
+        path: list[int] = []
+        path_index: dict[int, int] = {}
+        x = seed
+        while x not in visited and x not in path_index:
+            path_index[x] = len(path)
+            path.append(x)
+            x = (2 * x) % modulus
+
+        if x in path_index:
+            # New cycle starts at first repeat within this path.
+            cyc = path[path_index[x] :]
+            cycles.append(cyc)
+            visited.update(path)
+        else:
+            # Merged into a previously visited component (tail into known cycle).
+            visited.update(path)
+
+    orbit_1, len_1 = doubling_orbit(1, modulus)
+    lengths = [len(c) for c in cycles]
+    return {
+        "modulus": int(modulus),
+        "cycles": cycles,
+        "cycle_lengths": lengths,
+        "num_cycles": len(cycles),
+        "orbit_from_1": orbit_1,
+        "length_from_1": len_1,
+    }
+
+
 def trinity_related_sequence(length: int = 100) -> list[int]:
     """Optional companion sequence highlighting 3-6-9 via multiples of 3.
 
@@ -128,6 +264,19 @@ def trinity_related_sequence(length: int = 100) -> list[int]:
     if length < 0:
         raise ValueError("length must be non-negative")
     return [digital_root(3 * (i + 1)) for i in range(length)]
+
+
+def modulus_sweep_report(
+    moduli: Sequence[int] | None = None,
+) -> list[dict]:
+    """Summarize doubling structure for a list of moduli (default suggested set).
+
+    Returns one :func:`doubling_cycle_structure` dict per modulus, sorted
+    by the given order (default :data:`SUGGESTED_MODULI`).
+    """
+    if moduli is None:
+        moduli = SUGGESTED_MODULI
+    return [doubling_cycle_structure(int(m)) for m in moduli]
 
 
 # ---------------------------------------------------------------------------
@@ -193,47 +342,100 @@ def circle_angles(
 # ---------------------------------------------------------------------------
 
 
-def _map_step_index(theta: float, step_index: int | None, **_kwargs: object) -> int:
-    """Default: digital root of the step index (1-based for non-zero steps)."""
+def _map_step_index(
+    theta: float,
+    step_index: int | None,
+    modulus: int = DEFAULT_LABEL_MODULUS,
+    **_kwargs: object,
+) -> int:
+    """Label by step index.
+
+    For ``modulus == 9`` (classic vortex): digital root, with step 0 → 9.
+    For other moduli: plain ``step_index % modulus``.
+    """
     if step_index is None:
         raise ValueError("step_index required for method 'step_index'")
-    # Step 0 → digit 9 (often associated with completion / center);
-    # subsequent steps use digital_root of the 1-based index.
-    if step_index == 0:
-        return 9
-    return digital_root(step_index)
+    if modulus == 9:
+        # Step 0 → digit 9 (completion / center); else digital root.
+        if step_index == 0:
+            return 9
+        return digital_root(step_index)
+    return modular_label(step_index, modulus)
 
 
-def _map_angle_bin(theta: float, step_index: int | None = None, **_kwargs: object) -> int:
-    """Partition the circle into 9 equal sectors → digits 1–9."""
-    # Normalize to [0, 2π)
+def _map_angle_bin(
+    theta: float,
+    step_index: int | None = None,
+    modulus: int = DEFAULT_LABEL_MODULUS,
+    **_kwargs: object,
+) -> int:
+    """Partition the circle into ``modulus`` equal sectors.
+
+    Classic vortex (``modulus == 9``): labels 1–9.
+    General ``m``: labels 0 … m-1.
+    """
     t = float(np.mod(theta, TWO_PI))
-    bin_idx = int(np.floor(t / TWO_PI * 9.0))  # 0..8
-    return bin_idx + 1  # 1..9
+    bin_idx = int(np.floor(t / TWO_PI * float(modulus))) % modulus
+    if modulus == 9:
+        return bin_idx + 1  # 1..9
+    return bin_idx  # 0..m-1
 
 
-def _map_sin_dr(theta: float, step_index: int | None = None, **_kwargs: object) -> int:
-    """Digital root of a scaled |sin(θ)| (exploratory mapping)."""
-    # Map |sin| ∈ [0,1] → integer 1..999 then digital root
+def _map_sin_dr(
+    theta: float,
+    step_index: int | None = None,
+    modulus: int = DEFAULT_LABEL_MODULUS,
+    **_kwargs: object,
+) -> int:
+    """Map scaled |sin(θ)| via digital root (m=9) or modular residue."""
     s = abs(np.sin(theta))
     n = max(1, int(round(s * 999)))
-    return digital_root(n)
+    if modulus == 9:
+        return digital_root(n)
+    return modular_label(n, modulus)
 
 
-def _map_cos_dr(theta: float, step_index: int | None = None, **_kwargs: object) -> int:
-    """Digital root of a scaled |cos(θ)| (exploratory mapping)."""
+def _map_cos_dr(
+    theta: float,
+    step_index: int | None = None,
+    modulus: int = DEFAULT_LABEL_MODULUS,
+    **_kwargs: object,
+) -> int:
+    """Map scaled |cos(θ)| via digital root (m=9) or modular residue."""
     c = abs(np.cos(theta))
     n = max(1, int(round(c * 999)))
-    return digital_root(n)
+    if modulus == 9:
+        return digital_root(n)
+    return modular_label(n, modulus)
 
 
 def _map_doubling_cycle(
-    theta: float, step_index: int | None = None, **_kwargs: object
+    theta: float,
+    step_index: int | None = None,
+    modulus: int = DEFAULT_LABEL_MODULUS,
+    **_kwargs: object,
 ) -> int:
-    """Assign digit from the vortex doubling cycle by step index."""
+    """Assign label from the ×2 orbit starting at 1, by step index."""
     if step_index is None:
         raise ValueError("step_index required for method 'doubling_cycle'")
-    return VORTEX_CYCLE[step_index % len(VORTEX_CYCLE)]
+    if modulus == 9:
+        return VORTEX_CYCLE[step_index % len(VORTEX_CYCLE)]
+    orbit, _ = doubling_orbit(1, modulus)
+    if not orbit:
+        return 0
+    return orbit[step_index % len(orbit)]
+
+
+def _map_mod(
+    theta: float,
+    step_index: int | None = None,
+    modulus: int = DEFAULT_LABEL_MODULUS,
+    **_kwargs: object,
+) -> int:
+    """Always plain modular label of the step index (ignores digital-root special case)."""
+    if step_index is None:
+        raise ValueError("step_index required for method 'mod'")
+    return modular_label(step_index, modulus)
 
 
 _MAPPING_REGISTRY: dict[str, Callable[..., int]] = {
@@ -242,20 +444,26 @@ _MAPPING_REGISTRY: dict[str, Callable[..., int]] = {
     "sin_dr": _map_sin_dr,
     "cos_dr": _map_cos_dr,
     "doubling_cycle": _map_doubling_cycle,
+    "mod": _map_mod,
 }
 
 
 def register_mapping(name: str, fn: Callable[..., int]) -> None:
-    """Register a custom angle→digit mapping for :func:`position_to_vortex_digit`."""
+    """Register a custom angle→label mapping for :func:`position_to_label`."""
     _MAPPING_REGISTRY[name] = fn
 
 
-def position_to_vortex_digit(
+def position_to_label(
     theta: float,
     method: str = "step_index",
     step_index: int | None = None,
+    modulus: int = DEFAULT_LABEL_MODULUS,
 ) -> int:
-    """Map an angle (and optional step index) to a vortex digit 1–9.
+    """Map an angle (and optional step index) to a modular / vortex label.
+
+    Geometric orbit is independent of ``modulus`` — only the discrete label
+    changes. Default geometric step remains ``9/π``; labeling modulus is the
+    free parameter for mechanism discovery (9, 37, 111, 333, …).
 
     Parameters
     ----------
@@ -264,28 +472,80 @@ def position_to_vortex_digit(
     method :
         Mapping strategy:
 
-        - ``"step_index"`` (default): digital root of the step index
-          (step 0 → 9). Links the orbit order to digital roots.
-        - ``"angle_bin"``: ``floor((θ / 2π) * 9) + 1`` — nine equal arcs.
-        - ``"sin_dr"`` / ``"cos_dr"``: digital root of scaled |sin| / |cos|.
-        - ``"doubling_cycle"``: cycle through 1-2-4-8-7-5 by step index.
+        - ``"step_index"`` (default): digital root when ``modulus==9``
+          (step 0 → 9); else ``step_index % modulus``.
+        - ``"mod"``: always ``step_index % modulus`` (no digital-root case).
+        - ``"angle_bin"``: ``modulus`` equal arcs (1–9 when m=9, else 0..m-1).
+        - ``"sin_dr"`` / ``"cos_dr"``: digital root or modular map of scaled trig.
+        - ``"doubling_cycle"``: walk the ×2 orbit mod ``m`` by step index.
 
         Custom methods may be added via :func:`register_mapping`.
     step_index :
         Discrete step number along the orbit (required for some methods).
+    modulus :
+        Labeling modulus (does **not** change the arc step).
 
     Returns
     -------
     int
-        Digit in 1–9.
+        Label: classic vortex digit in 1–9 when ``modulus==9`` and method is
+        digital-root based; otherwise a residue in ``0 .. modulus-1`` (or
+        doubling-orbit residue).
     """
+    if modulus <= 0:
+        raise ValueError(f"modulus must be positive, got {modulus}")
     if method not in _MAPPING_REGISTRY:
         known = ", ".join(sorted(_MAPPING_REGISTRY))
         raise ValueError(f"Unknown method {method!r}. Known: {known}")
-    digit = _MAPPING_REGISTRY[method](theta, step_index=step_index)
-    if digit < 1 or digit > 9:
-        raise ValueError(f"Mapping {method!r} returned out-of-range digit {digit}")
-    return int(digit)
+    label = _MAPPING_REGISTRY[method](
+        theta, step_index=step_index, modulus=int(modulus)
+    )
+    return int(label)
+
+
+def position_to_vortex_digit(
+    theta: float,
+    method: str = "step_index",
+    step_index: int | None = None,
+    modulus: int = DEFAULT_LABEL_MODULUS,
+) -> int:
+    """Map an angle to a label (alias of :func:`position_to_label`).
+
+    When ``modulus == 9`` and method is a classic vortex map, the result is a
+    digit in 1–9. For other moduli, returns the modular label (no 1–9 clamp).
+    """
+    return position_to_label(
+        theta, method=method, step_index=step_index, modulus=modulus
+    )
+
+
+def labels_for_orbit(
+    num_steps: int,
+    step_radians: float = DEFAULT_STEP_RADIANS,
+    method: str = "step_index",
+    start_angle: float = 0.0,
+    modulus: int = DEFAULT_LABEL_MODULUS,
+) -> np.ndarray:
+    """Vector of modular / vortex labels for each point of an orbit.
+
+    Geometry uses ``step_radians`` (default ``9/π``). Labeling uses
+    ``modulus`` independently.
+
+    Returns
+    -------
+    np.ndarray
+        Integer array of shape ``(num_steps,)``.
+    """
+    angles = circle_angles(num_steps, step_radians, start_angle)
+    return np.array(
+        [
+            position_to_label(
+                float(th), method=method, step_index=i, modulus=modulus
+            )
+            for i, th in enumerate(angles)
+        ],
+        dtype=int,
+    )
 
 
 def digits_for_orbit(
@@ -293,21 +553,15 @@ def digits_for_orbit(
     step_radians: float = DEFAULT_STEP_RADIANS,
     method: str = "step_index",
     start_angle: float = 0.0,
+    modulus: int = DEFAULT_LABEL_MODULUS,
 ) -> np.ndarray:
-    """Vector of vortex digits for each point of an orbit.
-
-    Returns
-    -------
-    np.ndarray
-        Integer array of shape ``(num_steps,)`` with values in 1–9.
-    """
-    angles = circle_angles(num_steps, step_radians, start_angle)
-    return np.array(
-        [
-            position_to_vortex_digit(float(th), method=method, step_index=i)
-            for i, th in enumerate(angles)
-        ],
-        dtype=int,
+    """Alias of :func:`labels_for_orbit` (historical name for vortex digits)."""
+    return labels_for_orbit(
+        num_steps,
+        step_radians=step_radians,
+        method=method,
+        start_angle=start_angle,
+        modulus=modulus,
     )
 
 
@@ -364,7 +618,8 @@ def doubling_edges() -> list[tuple[int, int]]:
 def default_config() -> dict:
     """Small config dict for step size and mapping (easy to extend)."""
     return {
-        "step_radians": DEFAULT_STEP_RADIANS,
+        "step_radians": DEFAULT_STEP_RADIANS,  # geometry: keep 9/π by default
+        "label_modulus": DEFAULT_LABEL_MODULUS,  # free parameter for mechanism search
         "mapping_method": "step_index",
         "start_angle": 0.0,
         "style": "dark",  # or "light"

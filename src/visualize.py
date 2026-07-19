@@ -15,7 +15,7 @@ import shutil
 import subprocess
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Literal, Sequence
+from typing import Any, Literal, Sequence  # Sequence used by modulus comparison
 
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
@@ -26,14 +26,20 @@ from matplotlib.figure import Figure
 from matplotlib.patches import Circle
 
 from .core import (
+    DEFAULT_LABEL_MODULUS,
     DEFAULT_STEP_RADIANS,
+    SUGGESTED_MODULI,
     TRINITY_DIGITS,
     VORTEX_CYCLE,
     TWO_PI,
     circle_angles,
     circle_positions,
     digits_for_orbit,
+    doubling_cycle_structure,
     doubling_edges,
+    doubling_orbit,
+    labels_for_orbit,
+    modulus_sweep_report,
     vortex_number_circle_coords,
 )
 
@@ -462,12 +468,28 @@ def vortex_colormap() -> ListedColormap:
     return ListedColormap(VORTEX_PALETTE_9)
 
 
-def _digit_colors(digits: np.ndarray) -> np.ndarray:
-    """Map digit array (1–9) to RGBA using the palette."""
-    cmap = ListedColormap(VORTEX_PALETTE_9)
-    # Normalize 1..9 → 0..1 for ListedColormap with 9 colors
-    normed = (digits.astype(float) - 1.0) / 8.0
-    return cmap(normed)
+def label_colormap(modulus: int = DEFAULT_LABEL_MODULUS):
+    """Colormap suited to labeling modulus ``m`` (categorical 9 vs continuous)."""
+    if modulus == 9:
+        return vortex_colormap()
+    # Continuous map works for large m (37, 111, 333).
+    return plt.get_cmap("turbo")
+
+
+def _label_vmin_vmax(labels: np.ndarray, modulus: int) -> tuple[float, float]:
+    """Color limits for scatter / colorbar given classic (1–9) vs modular (0..m-1)."""
+    if modulus == 9 and labels.size and int(labels.min()) >= 1:
+        return 0.5, 9.5
+    return -0.5, float(modulus) - 0.5
+
+
+def _digit_colors(digits: np.ndarray, modulus: int = DEFAULT_LABEL_MODULUS) -> np.ndarray:
+    """Map label array to RGBA."""
+    cmap = label_colormap(modulus)
+    vmin, vmax = _label_vmin_vmax(digits, modulus)
+    span = max(vmax - vmin, 1e-9)
+    normed = (digits.astype(float) - vmin) / span
+    return cmap(np.clip(normed, 0.0, 1.0))
 
 
 # ---------------------------------------------------------------------------
@@ -479,20 +501,21 @@ def plot_unit_circle_with_steps(
     num_steps: int = 50,
     step: float = DEFAULT_STEP_RADIANS,
     method: str = "step_index",
+    modulus: int = DEFAULT_LABEL_MODULUS,
     style: Literal["dark", "light"] = "dark",
     label_first: int = 12,
-    show_vortex_overlay: bool = True,
+    show_vortex_overlay: bool | None = None,
     show_doubling_star: bool = True,
     title: str | None = None,
     ax: plt.Axes | None = None,
     save_path: str | Path | None = None,
     figsize: tuple[float, float] = (9, 9),
 ) -> Figure:
-    """Scatter unit-circle points stepped by ``step`` radians, colored by vortex digit.
+    """Scatter unit-circle points stepped by ``step`` radians, colored by label.
 
-    Overlays the classic 1–9 number circle and the doubling-sequence star
-    (1→2→4→8→7→5→1). Digit 9 is marked specially at the center of the
-    overlay diagram.
+    Geometry defaults to ``9/π``. ``modulus`` only changes the discrete
+    coloring / labeling (not the arc step). Classic 1–9 overlay is shown
+    when ``modulus == 9`` unless overridden.
 
     Parameters
     ----------
@@ -501,13 +524,15 @@ def plot_unit_circle_with_steps(
     step :
         Arc step in radians (default ``9/π``).
     method :
-        Mapping method for :func:`core.position_to_vortex_digit`.
+        Mapping method for :func:`core.position_to_label`.
+    modulus :
+        Labeling modulus (independent of ``step``).
     style :
         ``"dark"`` or ``"light"``.
     label_first :
         Annotate the first N points with step index.
     show_vortex_overlay :
-        Draw the 1–9 number circle (slightly larger radius).
+        Draw the 1–9 number circle. Default: True only when ``modulus==9``.
     show_doubling_star :
         Connect the doubling circuit on the number circle.
     title :
@@ -523,6 +548,9 @@ def plot_unit_circle_with_steps(
     -------
     Figure
     """
+    if show_vortex_overlay is None:
+        show_vortex_overlay = modulus == 9
+
     colors_meta = apply_style(style)
     created_fig = ax is None
     if created_fig:
@@ -531,8 +559,8 @@ def plot_unit_circle_with_steps(
         fig = ax.figure
 
     x, y = circle_positions(num_steps, step)
-    digits = digits_for_orbit(num_steps, step, method=method)
-    point_colors = _digit_colors(digits)
+    digits = labels_for_orbit(num_steps, step, method=method, modulus=modulus)
+    point_colors = _digit_colors(digits, modulus=modulus)
 
     # Unit circle guide
     theta = np.linspace(0, TWO_PI, 400)
@@ -547,25 +575,31 @@ def plot_unit_circle_with_steps(
 
     # Stepped points
     sizes = np.full(num_steps, 36.0)
-    # Emphasize 3-6-9 slightly larger
-    for t in TRINITY_DIGITS:
-        sizes[digits == t] = 55.0
+    # Emphasize 3-6-9 slightly larger (only meaningful for classic digits)
+    if modulus == 9:
+        for t in TRINITY_DIGITS:
+            sizes[digits == t] = 55.0
 
+    vmin, vmax = _label_vmin_vmax(digits, modulus)
     sc = ax.scatter(
         x,
         y,
         c=digits,
-        cmap=vortex_colormap(),
-        vmin=0.5,
-        vmax=9.5,
+        cmap=label_colormap(modulus),
+        vmin=vmin,
+        vmax=vmax,
         s=sizes,
         edgecolors=colors_meta["fg"],
         linewidths=0.35,
         alpha=0.9,
         zorder=5,
     )
-    cbar = fig.colorbar(sc, ax=ax, ticks=range(1, 10), fraction=0.046, pad=0.04)
-    cbar.set_label("Vortex digit")
+    if modulus == 9:
+        cbar = fig.colorbar(sc, ax=ax, ticks=range(1, 10), fraction=0.046, pad=0.04)
+        cbar.set_label("Vortex digit")
+    else:
+        cbar = fig.colorbar(sc, ax=ax, fraction=0.046, pad=0.04)
+        cbar.set_label(f"label mod {modulus}")
 
     # Labels for first few points
     n_lab = min(label_first, num_steps)
@@ -601,7 +635,7 @@ def plot_unit_circle_with_steps(
     if title is None:
         title = (
             f"Unit circle · step = 9/π ≈ {step:.5f} rad · "
-            f"n = {num_steps} · map = {method}"
+            f"n = {num_steps} · map = {method} · m = {modulus}"
         )
     ax.set_title(title, fontsize=11, pad=12)
     ax.set_xlabel("x = cos(θ)")
@@ -688,6 +722,7 @@ def plot_vortex_flow_on_circle(
     num_steps: int = 80,
     step: float = DEFAULT_STEP_RADIANS,
     method: str = "step_index",
+    modulus: int = DEFAULT_LABEL_MODULUS,
     style: Literal["dark", "light"] = "dark",
     save_path: str | Path | None = None,
     figsize: tuple[float, float] = (12, 6),
@@ -735,29 +770,33 @@ def plot_vortex_flow_on_circle(
     ax_left.set_title("Vortex flow (doubling star 1-2-4-8-7-5)")
     ax_left.axis("off")
 
-    # --- Right: stepped orbit ---
+    # --- Right: stepped orbit (geometry 9/π; color by labeling modulus) ---
     x, y = circle_positions(num_steps, step)
-    digits = digits_for_orbit(num_steps, step, method=method)
+    digits = labels_for_orbit(num_steps, step, method=method, modulus=modulus)
     ax_right.plot(np.cos(theta), np.sin(theta), color=colors_meta["grid"], lw=1.0, alpha=0.7)
     # Path polyline
     ax_right.plot(x, y, color=colors_meta["grid"], lw=0.6, alpha=0.35, zorder=2)
+    vmin, vmax = _label_vmin_vmax(digits, modulus)
     sc = ax_right.scatter(
         x,
         y,
         c=digits,
-        cmap=vortex_colormap(),
-        vmin=0.5,
-        vmax=9.5,
+        cmap=label_colormap(modulus),
+        vmin=vmin,
+        vmax=vmax,
         s=40,
         edgecolors=colors_meta["fg"],
         linewidths=0.3,
         zorder=5,
     )
-    fig.colorbar(sc, ax=ax_right, ticks=range(1, 10), fraction=0.046, pad=0.04)
+    if modulus == 9:
+        fig.colorbar(sc, ax=ax_right, ticks=range(1, 10), fraction=0.046, pad=0.04)
+    else:
+        fig.colorbar(sc, ax=ax_right, fraction=0.046, pad=0.04)
     ax_right.set_aspect("equal")
     ax_right.set_xlim(-1.2, 1.2)
     ax_right.set_ylim(-1.2, 1.2)
-    ax_right.set_title(f"9/π steps (n={num_steps})")
+    ax_right.set_title(f"9/π steps (n={num_steps}, m={modulus})")
     ax_right.set_xlabel("x")
     ax_right.set_ylabel("y")
     ax_right.grid(True, alpha=0.25)
@@ -831,6 +870,7 @@ def animate_circle_steps(
     num_steps: int = 200,
     step: float = DEFAULT_STEP_RADIANS,
     method: str = "step_index",
+    modulus: int = DEFAULT_LABEL_MODULUS,
     interval: int = 50,
     style: Literal["dark", "light"] = "dark",
     save_gif: bool = False,
@@ -844,8 +884,9 @@ def animate_circle_steps(
 
     Parameters
     ----------
-    num_steps, step, method, interval :
-        Orbit and animation timing (ms between frames).
+    num_steps, step, method, modulus, interval :
+        Orbit geometry (default step 9/π), labeling modulus, and animation
+        timing (ms between frames).
     save_gif / save_mp4 :
         Persist animation under ``assets/`` (or ``save_path``).
     blit :
@@ -857,8 +898,8 @@ def animate_circle_steps(
     """
     colors_meta = apply_style(style)
     x, y = circle_positions(num_steps, step)
-    digits = digits_for_orbit(num_steps, step, method=method)
-    rgba = _digit_colors(digits)
+    digits = labels_for_orbit(num_steps, step, method=method, modulus=modulus)
+    rgba = _digit_colors(digits, modulus=modulus)
 
     fig, ax = plt.subplots(figsize=figsize)
     th = np.linspace(0, TWO_PI, 400)
@@ -943,6 +984,7 @@ def plot_interactive_plotly(
     num_steps: int = 100,
     step: float = DEFAULT_STEP_RADIANS,
     method: str = "step_index",
+    modulus: int = DEFAULT_LABEL_MODULUS,
     save_html: str | Path | None = None,
 ):
     """Interactive Plotly scatter with slider-friendly layout for steps.
@@ -950,7 +992,8 @@ def plot_interactive_plotly(
     Note: full live sliders for recomputing orbits work best inside a
     notebook or Dash app; this function builds a rich static-interactive
     figure for a given ``num_steps`` / ``step``, and optionally frames
-    for several step counts.
+    for several step counts. Geometry stays at default 9/π; ``modulus``
+    only changes label colors.
     """
     import plotly.graph_objects as go
 
@@ -959,10 +1002,13 @@ def plot_interactive_plotly(
         step_options.append(num_steps)
         step_options = sorted(set(step_options))
 
+    cmin, cmax = (1, 9) if modulus == 9 else (0, modulus - 1)
+    cbar_title = "digit" if modulus == 9 else f"mod {modulus}"
+
     frames = []
     for n in step_options:
         x, y = circle_positions(n, step)
-        digits = digits_for_orbit(n, step, method=method)
+        digits = labels_for_orbit(n, step, method=method, modulus=modulus)
         frames.append(
             go.Frame(
                 data=[
@@ -974,9 +1020,9 @@ def plot_interactive_plotly(
                             size=8,
                             color=digits,
                             colorscale="Viridis",
-                            cmin=1,
-                            cmax=9,
-                            colorbar=dict(title="digit"),
+                            cmin=cmin,
+                            cmax=cmax,
+                            colorbar=dict(title=cbar_title),
                             line=dict(width=0.5, color="#333"),
                         ),
                         line=dict(width=0.5, color="rgba(150,150,150,0.35)"),
@@ -991,7 +1037,7 @@ def plot_interactive_plotly(
 
     # Initial data
     x0, y0 = circle_positions(num_steps, step)
-    d0 = digits_for_orbit(num_steps, step, method=method)
+    d0 = labels_for_orbit(num_steps, step, method=method, modulus=modulus)
     th = np.linspace(0, TWO_PI, 400)
 
     fig = go.Figure(
@@ -1012,9 +1058,9 @@ def plot_interactive_plotly(
                     size=8,
                     color=d0,
                     colorscale="Viridis",
-                    cmin=1,
-                    cmax=9,
-                    colorbar=dict(title="digit"),
+                    cmin=cmin,
+                    cmax=cmax,
+                    colorbar=dict(title=cbar_title),
                 ),
                 line=dict(width=0.5, color="rgba(150,150,150,0.35)"),
                 name="orbit",
@@ -1052,7 +1098,7 @@ def plot_interactive_plotly(
         )
 
     fig.update_layout(
-        title=f"Interactive vortex circle · step=9/π · method={method}",
+        title=f"Interactive vortex circle · step=9/π · method={method} · m={modulus}",
         xaxis=dict(scaleanchor="y", scaleratio=1, range=[-1.6, 1.6], title="x"),
         yaxis=dict(range=[-1.6, 1.6], title="y"),
         template="plotly_dark",
@@ -1184,6 +1230,7 @@ def plot_torus_projection(
     num_steps: int = 300,
     step: float = DEFAULT_STEP_RADIANS,
     method: str = "step_index",
+    modulus: int = DEFAULT_LABEL_MODULUS,
     R: float = 2.5,
     r: float = 1.0,
     phi_scale: float = 3.0,
@@ -1206,7 +1253,9 @@ def plot_torus_projection(
     step :
         Arc step in radians (default ``9/π``).
     method :
-        Vortex-digit mapping for point colors.
+        Label mapping for point colors.
+    modulus :
+        Labeling modulus (geometry step unchanged).
     R, r :
         Major / minor torus radii.
     phi_scale :
@@ -1217,7 +1266,7 @@ def plot_torus_projection(
     """
     colors_meta = apply_style(style)
     x, y, z = _torus_orbit_coords(num_steps, step, R, r, phi_scale=phi_scale)
-    digits = digits_for_orbit(num_steps, step, method=method)
+    digits = labels_for_orbit(num_steps, step, method=method, modulus=modulus)
 
     fig = plt.figure(figsize=figsize)
     ax = fig.add_subplot(111, projection="3d")
@@ -1241,15 +1290,16 @@ def plot_torus_projection(
     path_color = "#e6edf3" if style == "dark" else "#333333"
     ax.plot(x, y, z, color=path_color, linewidth=0.85, alpha=0.40, zorder=1)
 
-    # Points: larger, white edge “glow”, colored by vortex digit
+    # Points: larger, white edge “glow”, colored by modular / vortex label
+    vmin, vmax = _label_vmin_vmax(digits, modulus)
     scatter = ax.scatter(
         x,
         y,
         z,
         c=digits,
-        cmap=vortex_colormap(),
-        vmin=0.5,
-        vmax=9.5,
+        cmap=label_colormap(modulus),
+        vmin=vmin,
+        vmax=vmax,
         s=38,
         alpha=0.95,
         edgecolors="white",
@@ -1257,15 +1307,19 @@ def plot_torus_projection(
         depthshade=True,
         zorder=5,
     )
-    cbar = fig.colorbar(scatter, ax=ax, shrink=0.6, pad=0.08, ticks=range(1, 10))
-    cbar.set_label("Vortex digit")
+    if modulus == 9:
+        cbar = fig.colorbar(scatter, ax=ax, shrink=0.6, pad=0.08, ticks=range(1, 10))
+        cbar.set_label("Vortex digit")
+    else:
+        cbar = fig.colorbar(scatter, ax=ax, shrink=0.6, pad=0.08)
+        cbar.set_label(f"label mod {modulus}")
 
     ax.set_xlabel("X  (toroidal)", labelpad=8)
     ax.set_ylabel("Y  (toroidal)", labelpad=8)
     ax.set_zlabel("Z  (poloidal)", labelpad=8)
     ax.set_title(
         f"Toroidal projection of 9/π steps (n={num_steps}) — black wireframe\n"
-        f"step ≈ {step:.5f} rad · φ = {phi_scale:g}·θ · map = {method}",
+        f"step ≈ {step:.5f} rad · φ = {phi_scale:g}·θ · map = {method} · m = {modulus}",
         pad=18,
         fontsize=12,
     )
@@ -1295,6 +1349,7 @@ def animate_torus_projection(
     num_steps: int = 300,
     step: float = DEFAULT_STEP_RADIANS,
     method: str = "step_index",
+    modulus: int = DEFAULT_LABEL_MODULUS,
     R: float = 2.5,
     r: float = 1.0,
     phi_scale: float = 3.0,
@@ -1377,8 +1432,8 @@ def animate_torus_projection(
     """
     apply_style(style)
     x, y, z = _torus_orbit_coords(num_steps, step, R, r, phi_scale=phi_scale)
-    digits = digits_for_orbit(num_steps, step, method=method)
-    rgba = _digit_colors(digits)
+    digits = labels_for_orbit(num_steps, step, method=method, modulus=modulus)
+    rgba = _digit_colors(digits, modulus=modulus)
 
     # Strict timeline: construct ALL steps → hold → accelerate-rotate
     # Camera does not spin until construction (and hold) are finished.
@@ -1676,6 +1731,77 @@ def animate_torus_projection(
         )
 
     return anim
+
+
+def plot_modulus_comparison(
+    moduli: Sequence[int] | None = None,
+    num_steps: int = 120,
+    step: float = DEFAULT_STEP_RADIANS,
+    method: str = "step_index",
+    style: Literal["dark", "light"] = "dark",
+    save_path: str | Path | None = None,
+    figsize: tuple[float, float] | None = None,
+) -> Figure:
+    """Side-by-side unit-circle orbits for several labeling moduli.
+
+    Geometry is fixed (default ``9/π``). Only the discrete label set
+    changes — the practical way to see mechanism swap for m ∈ {9, 37, 111, 333}.
+    """
+    if moduli is None:
+        moduli = list(SUGGESTED_MODULI)
+    n = len(moduli)
+    if figsize is None:
+        figsize = (4.2 * n, 4.4)
+
+    colors_meta = apply_style(style)
+    fig, axes = plt.subplots(1, n, figsize=figsize, squeeze=False)
+    axes_row = axes[0]
+
+    x, y = circle_positions(num_steps, step)
+    th = np.linspace(0, TWO_PI, 400)
+    cx, cy = np.cos(th), np.sin(th)
+
+    for ax, m in zip(axes_row, moduli):
+        labels = labels_for_orbit(num_steps, step, method=method, modulus=int(m))
+        vmin, vmax = _label_vmin_vmax(labels, int(m))
+        ax.plot(cx, cy, color=colors_meta["grid"], lw=0.9, alpha=0.7)
+        sc = ax.scatter(
+            x,
+            y,
+            c=labels,
+            cmap=label_colormap(int(m)),
+            vmin=vmin,
+            vmax=vmax,
+            s=22,
+            edgecolors=colors_meta["fg"],
+            linewidths=0.2,
+            alpha=0.9,
+            zorder=5,
+        )
+        info = doubling_cycle_structure(int(m))
+        orbit_1, len_1 = doubling_orbit(1, int(m))
+        ax.set_aspect("equal")
+        ax.set_xlim(-1.15, 1.15)
+        ax.set_ylim(-1.15, 1.15)
+        ax.set_title(
+            f"m = {m}\n×2 from 1: len {len_1} · cycles {info['num_cycles']}",
+            fontsize=9,
+        )
+        ax.set_xticks([])
+        ax.set_yticks([])
+        fig.colorbar(sc, ax=ax, fraction=0.046, pad=0.04)
+
+    fig.suptitle(
+        f"Labeling modulus sweep · geometric step fixed at 9/π · method={method} · n={num_steps}",
+        fontsize=11,
+        y=1.02,
+    )
+    fig.tight_layout()
+    if save_path is not None:
+        path = Path(save_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(path, dpi=160, bbox_inches="tight")
+    return fig
 
 
 def generate_default_assets(assets_dir: str | Path | None = None) -> dict[str, Path]:
