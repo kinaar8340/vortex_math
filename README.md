@@ -222,6 +222,16 @@ python src/main.py --resonance-scan --num-steps 600
 
 **Prefer `exNMI` over raw `NMI` when comparing different m** (raw NMI rises with more labels even without true lock).
 
+**Positive control (validates the null baseline):**
+
+```bash
+# Labels are angle bins by construction → strongly positive exNMI
+python src/main.py --resonance-scan --method angle_bin --num-steps 600
+
+# Contrast: step-index labels on irrational rotation → exNMI ≲ 0
+python src/main.py --resonance-scan --method step_index --num-steps 600
+```
+
 Helpers: `orbit_stats`, `family_orbit_report`, `resonance_scan`, `FAMILY_37`, `FAMILY_111`.
 
 ### Practical symmetry metrics (`src/analysis.py`)

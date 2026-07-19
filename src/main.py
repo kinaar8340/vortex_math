@@ -578,6 +578,8 @@ def main(argv: list[str] | None = None) -> int:
         else:
             moduli = CORE_MODULI
             tag = "core"
+        # Include method so angle_bin controls don't overwrite step_index charts
+        tag = f"{tag}_{args.method}"
         n_steps = max(args.num_steps, 400)
         rows_m = metrics_sweep(
             moduli=moduli,
@@ -830,13 +832,14 @@ def main(argv: list[str] | None = None) -> int:
                 f"exNMI={r.get('nmi_excess', float('nan')):+.4f}"
             )
 
-        out_bar = assets / "resonance_scan_111_nmi.png"
+        method_tag = args.method
+        out_bar = assets / f"resonance_scan_111_nmi_{method_tag}.png"
         fig_b = plot_orbit_stats_bars(
             rows,
             metric="label_angle_nmi",
             style=args.style,
             save_path=out_bar,
-            title="111-family · raw NMI (cardinality-biased)",
+            title=f"111-family · raw NMI · method={method_tag}",
         )
         print(f"[resonance-scan] raw NMI chart → {out_bar}")
         if args.show:
@@ -844,13 +847,13 @@ def main(argv: list[str] | None = None) -> int:
         else:
             plt.close(fig_b)
 
-        out_ex = assets / "resonance_scan_111_nmi_excess.png"
+        out_ex = assets / f"resonance_scan_111_nmi_excess_{method_tag}.png"
         fig_ex = plot_orbit_stats_bars(
             rows,
             metric="nmi_excess",
             style=args.style,
             save_path=out_ex,
-            title="111-family · NMI excess vs shuffle null (fair lock)",
+            title=f"111-family · NMI excess · method={method_tag}",
         )
         print(f"[resonance-scan] NMI-excess chart → {out_ex}")
         if args.show:
@@ -858,7 +861,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             plt.close(fig_ex)
 
-        out_c = assets / "resonance_scan_111_circle.png"
+        out_c = assets / f"resonance_scan_111_circle_{method_tag}.png"
         fig_c = plot_family_comparison(
             family=FAMILY_111,
             num_steps=max(args.num_steps, 100),
