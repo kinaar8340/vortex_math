@@ -323,6 +323,14 @@ Once the base visualizations are working, iterate with prompts like:
 - “Rodin-coil inspired multi-winding on a torus with 3-6-9 highlighted as a poloidal axis.”
 - “Export SVG layers for print / laser (number circle + orbit separately).”
 
+## Research note
+
+A short, citable summary of the three-layer results (algebra vs progression vs exNMI lock, plus the `angle_bin` control) is in:
+
+**[docs/RESEARCH_NOTE_moduli.md](docs/RESEARCH_NOTE_moduli.md)**
+
+Use that when referencing this work from the main 111 / book project.
+
 ## License / context
 
 Educational visualization project. Vortex math here is treated as a **numerological / geometric motif** (digital roots and doubling patterns), not as a claim about physics. Explore, plot, and extend freely.
