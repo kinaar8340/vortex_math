@@ -5,6 +5,12 @@ onto vortex-math concepts (digital roots, doubling sequence 1-2-4-8-7-5,
 and the special role of 3-6-9).
 """
 
+from .analysis import (
+    compute_all_metrics,
+    metrics_for_experiment,
+    metrics_sweep,
+    symmetry_score,
+)
 from .core import (
     CORE_MODULI,
     DEFAULT_LABEL_MODULUS,
@@ -41,10 +47,13 @@ __all__ = [
     "TRINITY_DIGITS",
     "VORTEX_CYCLE",
     "circle_positions",
+    "compute_all_metrics",
     "digital_root",
     "doubling_orbit",
     "family_orbit_report",
     "labels_for_orbit",
+    "metrics_for_experiment",
+    "metrics_sweep",
     "modular_label",
     "orbit_stats",
     "paired_label",
@@ -52,6 +61,7 @@ __all__ = [
     "position_to_vortex_digit",
     "resonance_scan",
     "step_radians_for",
+    "symmetry_score",
     "vortex_doubling_sequence",
 ]
 

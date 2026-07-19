@@ -220,6 +220,35 @@ python src/main.py --resonance-scan --num-steps 600
 
 Helpers: `orbit_stats`, `family_orbit_report`, `resonance_scan`, `FAMILY_37`, `FAMILY_111`.
 
+### Practical symmetry metrics (`src/analysis.py`)
+
+Comparable scores in ~[0, 1] for any `(step_mode, m, n)`:
+
+| Score | Measures |
+|-------|----------|
+| `angular_uniformity` | Even fill across angular sectors (`1/(1+CV)`) |
+| `label_progression` | Orderly label winding when sorted by angle |
+| `sector_purity` | How pure vs mixed colors are inside sectors |
+| `symmetry_score` | `0.6·uniformity + 0.4·progression` |
+
+```bash
+# Core moduli table under both step modes
+python src/main.py --metrics-sweep --num-steps 500
+
+# 37-family only
+python src/main.py --metrics-sweep --family-37 --num-steps 500
+
+# Extended + paired labels
+python src/main.py --metrics-sweep --extended --method paired --num-steps 500
+```
+
+```python
+from src.analysis import metrics_for_experiment, metrics_sweep
+
+print(metrics_for_experiment(37, "m_over_pi", num_steps=500))
+rows = metrics_sweep([9, 37, 111, 333], num_steps=500)
+```
+
 ## Tests
 
 ```bash

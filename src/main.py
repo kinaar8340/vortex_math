@@ -34,7 +34,9 @@ if "--show" not in sys.argv:
 import matplotlib.pyplot as plt
 import numpy as np
 
+from src.analysis import format_metrics_table, metrics_sweep
 from src.core import (
+    CORE_MODULI,
     DEFAULT_LABEL_MODULUS,
     DEFAULT_STEP_RADIANS,
     FAMILY_37,
@@ -221,6 +223,21 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--metrics-sweep",
+        action="store_true",
+        help=(
+            "Print angular uniformity / label progression / symmetry_score "
+            "table for core moduli (or --extended / --family-37 family). "
+            "Primary comparable scores across m."
+        ),
+    )
+    p.add_argument(
+        "--n-sectors",
+        type=int,
+        default=12,
+        help="Angular sectors for uniformity / purity metrics (default 12)",
+    )
+    p.add_argument(
         "--style",
         type=str,
         default="dark",
@@ -324,6 +341,7 @@ def main(argv: list[str] | None = None) -> int:
             args.orbit_stats,
             args.family_37,
             args.resonance_scan,
+            args.metrics_sweep,
         ]
     )
     if not actions:
@@ -461,8 +479,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\n[{heading}]")
         hdr = (
             f"  {'m':>5}  {'mode':>12}  {'len×2':>6}  {'cyc':>4}  "
-            f"{'ret_k':>5}  {'ret_d':>7}  {'ent':>5}  {'R':>5}  "
-            f"{'NMI':>6}  {'V':>5}  {'ΔNMI':>6}"
+            f"{'ret_k':>5}  {'ret_d':>7}  {'unif':>5}  {'prog':>5}  "
+            f"{'sym':>5}  {'NMI':>6}  {'ΔNMI':>6}"
         )
         print(hdr)
         print("  " + "-" * (len(hdr) - 2))
@@ -473,14 +491,16 @@ def main(argv: list[str] | None = None) -> int:
                 f"  {r['modulus']:>5}  {r['step_mode']:>12}  "
                 f"{r['length_from_1']:>6}  {r['num_cycles']:>4}  "
                 f"{r['best_return_k']:>5}  {r['best_return_dist']:>7.4f}  "
-                f"{r['entropy_ratio']:>5.3f}  {r['resultant_length']:>5.3f}  "
-                f"{r['label_angle_nmi']:>6.3f}  {r['label_angle_cramers_v']:>5.3f}  "
+                f"{r.get('angular_uniformity', float('nan')):>5.3f}  "
+                f"{r.get('label_progression', float('nan')):>5.3f}  "
+                f"{r.get('symmetry_score', float('nan')):>5.3f}  "
+                f"{r['label_angle_nmi']:>6.3f}  "
                 f"{delta_s}"
             )
         print(
-            "  legend: len×2=×2 orbit from 1; cyc=# cycles; ret_k/ret_d=best "
-            "geometric near-return; ent=angular entropy ratio; R=resultant; "
-            "NMI/V=label–angle alignment; ΔNMI = m/π NMI − fixed NMI"
+            "  legend: len×2=×2 from 1; cyc=# cycles; ret_k/ret_d=near-return; "
+            "unif/prog/sym=analysis metrics; NMI=label–angle; "
+            "ΔNMI = m/π NMI − fixed NMI"
         )
 
     if args.orbit_stats and not (args.family_37 or args.resonance_scan):
@@ -514,6 +534,97 @@ def main(argv: list[str] | None = None) -> int:
             plt.show()
         else:
             plt.close(fig_b)
+
+        out_sym = assets / f"orbit_stats_m{modulus}_symmetry.png"
+        fig_s = plot_orbit_stats_bars(
+            rows,
+            metric="symmetry_score",
+            style=args.style,
+            save_path=out_sym,
+            title=f"Symmetry score · m={modulus}",
+        )
+        print(f"[orbit-stats] symmetry chart → {out_sym}")
+        if args.show:
+            plt.show()
+        else:
+            plt.close(fig_s)
+
+    if args.metrics_sweep:
+        if args.family_37:
+            moduli = FAMILY_37
+            tag = "family37"
+        elif args.extended:
+            moduli = resolve_moduli(extended=True)
+            tag = "extended"
+        else:
+            moduli = CORE_MODULI
+            tag = "core"
+        n_steps = max(args.num_steps, 400)
+        rows_m = metrics_sweep(
+            moduli=moduli,
+            step_modes=("nine_over_pi", "m_over_pi"),
+            num_steps=n_steps,
+            method=args.method,
+            n_sectors=max(2, int(args.n_sectors)),
+        )
+        print(f"\n[metrics-sweep] moduli={list(moduli)}  n={n_steps}  method={args.method}")
+        print(format_metrics_table(rows_m))
+
+        # Rank by symmetry under m/π
+        coupled = [r for r in rows_m if r["step_mode"] == "m_over_pi"]
+        coupled_sorted = sorted(
+            coupled, key=lambda r: r["symmetry_score"], reverse=True
+        )
+        print("\n[metrics-sweep] rank by symmetry_score under m/π:")
+        for i, r in enumerate(coupled_sorted, 1):
+            print(
+                f"  {i}. m={r['modulus']:>4}  sym={r['symmetry_score']:.4f}  "
+                f"unif={r['angular_uniformity']:.4f}  "
+                f"prog={r['label_progression']:.4f}  "
+                f"purity={r['sector_purity']:.4f}"
+            )
+
+        out_sym = assets / f"metrics_symmetry_{tag}.png"
+        fig_s = plot_orbit_stats_bars(
+            rows_m,
+            metric="symmetry_score",
+            style=args.style,
+            save_path=out_sym,
+            title=f"Symmetry score · {tag} · method={args.method}",
+        )
+        print(f"[metrics-sweep] symmetry chart → {out_sym}")
+        if args.show:
+            plt.show()
+        else:
+            plt.close(fig_s)
+
+        out_u = assets / f"metrics_uniformity_{tag}.png"
+        fig_u = plot_orbit_stats_bars(
+            rows_m,
+            metric="angular_uniformity",
+            style=args.style,
+            save_path=out_u,
+            title=f"Angular uniformity · {tag}",
+        )
+        print(f"[metrics-sweep] uniformity chart → {out_u}")
+        if args.show:
+            plt.show()
+        else:
+            plt.close(fig_u)
+
+        out_p = assets / f"metrics_progression_{tag}.png"
+        fig_p = plot_orbit_stats_bars(
+            rows_m,
+            metric="label_progression",
+            style=args.style,
+            save_path=out_p,
+            title=f"Label progression · {tag}",
+        )
+        print(f"[metrics-sweep] progression chart → {out_p}")
+        if args.show:
+            plt.show()
+        else:
+            plt.close(fig_p)
 
     if args.family_37:
         n_stats = max(args.num_steps, 400)
@@ -578,6 +689,20 @@ def main(argv: list[str] | None = None) -> int:
         else:
             plt.close(fig_b)
 
+        out_sym = assets / "family_37_symmetry.png"
+        fig_s = plot_orbit_stats_bars(
+            rows,
+            metric="symmetry_score",
+            style=args.style,
+            save_path=out_sym,
+            title="37-family · symmetry score (0.6·unif + 0.4·prog)",
+        )
+        print(f"[family-37] symmetry bars → {out_sym}")
+        if args.show:
+            plt.show()
+        else:
+            plt.close(fig_s)
+
         out_len = assets / "family_37_return.png"
         fig_r = plot_orbit_stats_bars(
             rows,
@@ -591,6 +716,24 @@ def main(argv: list[str] | None = None) -> int:
             plt.show()
         else:
             plt.close(fig_r)
+
+        # Also print focused metrics table for the family
+        print("\n[family-37] practical metrics (uniformity / progression / symmetry):")
+        print(
+            format_metrics_table(
+                [
+                    {
+                        "modulus": r["modulus"],
+                        "step_mode": r["step_mode"],
+                        "angular_uniformity": r["angular_uniformity"],
+                        "label_progression": r["label_progression"],
+                        "sector_purity": r["sector_purity"],
+                        "symmetry_score": r["symmetry_score"],
+                    }
+                    for r in rows
+                ]
+            )
+        )
 
     if args.resonance_scan:
         n_stats = max(args.num_steps, 600)

@@ -548,6 +548,19 @@ def orbit_stats(
     lab_max_ent = float(np.log(max(lab_unique.size, 1)))
     label_entropy_ratio = lab_entropy / lab_max_ent if lab_max_ent > 0 else 0.0
 
+    # Practical symmetry suite (lazy import avoids core↔analysis cycle at load)
+    from .analysis import compute_all_metrics
+
+    metrics = compute_all_metrics(
+        angles,
+        labels,
+        modulus=modulus,
+        n_sectors=max(12, n_bins // 3),
+        step_mode=str(step_mode),
+        method=method,
+        num_steps=num_steps,
+    )
+
     return {
         "modulus": int(modulus),
         "step_mode": str(step_mode),
@@ -575,6 +588,12 @@ def orbit_stats(
         "label_angle_cramers_v": align["cramers_v"],
         "label_entropy_ratio": label_entropy_ratio,
         "n_distinct_labels": int(lab_unique.size),
+        # Practical symmetry metrics (src.analysis)
+        "angular_uniformity": metrics["angular_uniformity"],
+        "label_progression": metrics["label_progression"],
+        "sector_purity": metrics["sector_purity"],
+        "sector_label_entropy": metrics["sector_label_entropy"],
+        "symmetry_score": metrics["symmetry_score"],
     }
 
 
