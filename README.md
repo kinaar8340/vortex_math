@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="bg1_vortex_math.png" alt="Vortex Math · unit circle and doubling circuit" width="100%">
+</p>
+
 # Vortex Math · Unit Circle Visualization
 
 Map **positions on the unit circle** obtained by stepping arc lengths of exactly **`9/π` radians** onto **vortex math** concepts: digital roots, the doubling circuit **1-2-4-8-7-5**, and the special role of **3-6-9**.
