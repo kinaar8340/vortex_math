@@ -2,7 +2,8 @@
 
 **Project:** [`vortex_math`](https://github.com/kinaar8340/vortex_math)  
 **Status:** Experimental framework complete; main claims supported by controls  
-**Audience:** Cross-reference for the main 111 / book project
+**Audience:** Cross-reference for the main 111 / book project  
+**Book prose:** polished section draft in [`book_section_modulus_invariants.md`](book_section_modulus_invariants.md)
 
 ---
 
