@@ -214,9 +214,13 @@ python src/main.py --resonance-scan --num-steps 600
 |--------|---------|
 | `len×2` / `cyc` | Algebraic ×2 orbit from 1 / number of cycles on ℤ/mℤ |
 | `ret_k` / `ret_d` | Best geometric near-return step and fractional-turn distance |
-| `ent` / `R` | Angular entropy ratio (→1 flat) and Rayleigh resultant (→0 uniform) |
-| `NMI` / `V` | Label–angle mutual information / Cramér's V (resonance proxy) |
-| `ΔNMI` | NMI under `m/π` minus NMI under fixed `9/π` |
+| `unif` / `prog` / `sym` | Angular uniformity, label progression, composite symmetry |
+| `NMI` | Raw label–angle normalized mutual information (**cardinality-biased**) |
+| `exNMI` | **NMI − shuffle-null mean** — fair label–geometry lock across moduli |
+| `z` | How many σ above the permutation null |
+| `Δex` | exNMI under `m/π` minus exNMI under fixed `9/π` |
+
+**Prefer `exNMI` over raw `NMI` when comparing different m** (raw NMI rises with more labels even without true lock).
 
 Helpers: `orbit_stats`, `family_orbit_report`, `resonance_scan`, `FAMILY_37`, `FAMILY_111`.
 

@@ -425,39 +425,23 @@ def angular_sector_stats(
     }
 
 
-def label_angle_alignment(
-    labels: np.ndarray,
-    angles: np.ndarray,
-    n_angle_bins: int = 18,
-) -> dict:
-    """Association between discrete labels and angular sectors.
-
-    Builds a contingency table (label × angle-bin) and reports:
-    - normalized mutual information (NMI) in [0, 1]
-    - Cramér's V association in [0, 1]
-
-    Higher values mean labels are more locked to angular position
-    (resonance / co-structure). Near 0 means labels and angles mix freely.
-    """
-    labs = np.asarray(labels)
-    ang = np.asarray(angles, dtype=float)
-    if labs.size != ang.size or labs.size == 0:
-        raise ValueError("labels and angles must be same non-zero length")
-
-    # Map labels to dense row indices
-    uniq, inv = np.unique(labs, return_inverse=True)
-    n_lab = int(uniq.size)
-    angle_bins = np.floor(np.mod(ang, TWO_PI) / TWO_PI * n_angle_bins).astype(int)
-    angle_bins = np.clip(angle_bins, 0, n_angle_bins - 1)
-
+def _contingency_mi_nmi(
+    inv: np.ndarray,
+    angle_bins: np.ndarray,
+    n_lab: int,
+    n_angle_bins: int,
+) -> tuple[float, float, float, float]:
+    """MI, NMI, Cramér's V, chi² from label-index + angle-bin vectors."""
     table = np.zeros((n_lab, n_angle_bins), dtype=float)
     for i, b in zip(inv, angle_bins):
-        table[i, b] += 1.0
+        table[int(i), int(b)] += 1.0
 
-    n = float(labs.size)
+    n = float(inv.size)
+    if n <= 0:
+        return 0.0, 0.0, 0.0, 0.0
+
     row = table.sum(axis=1, keepdims=True)
     col = table.sum(axis=0, keepdims=True)
-    # Mutual information
     mi = 0.0
     for i in range(n_lab):
         for j in range(n_angle_bins):
@@ -468,22 +452,89 @@ def label_angle_alignment(
             p_j = col[0, j] / n
             if p_i > 0 and p_j > 0:
                 mi += p_ij * float(np.log(p_ij / (p_i * p_j)))
-    # Entropies for NMI
-    p_row = (row.ravel() / n)
+
+    p_row = row.ravel() / n
     p_row = p_row[p_row > 0]
-    h_lab = float(-np.sum(p_row * np.log(p_row)))
-    p_col = (col.ravel() / n)
+    h_lab = float(-np.sum(p_row * np.log(p_row))) if p_row.size else 0.0
+    p_col = col.ravel() / n
     p_col = p_col[p_col > 0]
-    h_ang = float(-np.sum(p_col * np.log(p_col)))
+    h_ang = float(-np.sum(p_col * np.log(p_col))) if p_col.size else 0.0
     denom = max(h_lab, h_ang, 1e-15)
     nmi = float(mi / denom)
 
-    # Cramér's V
     expected = row @ col / n
     with np.errstate(divide="ignore", invalid="ignore"):
-        chi2 = np.nansum((table - expected) ** 2 / np.where(expected > 0, expected, np.nan))
+        chi2 = np.nansum(
+            (table - expected) ** 2 / np.where(expected > 0, expected, np.nan)
+        )
     k = min(n_lab, n_angle_bins)
     cramer_v = float(np.sqrt(chi2 / (n * max(k - 1, 1)))) if n > 0 else 0.0
+    chi2_f = float(chi2) if np.isfinite(chi2) else 0.0
+    return float(mi), nmi, cramer_v, chi2_f
+
+
+def label_angle_alignment(
+    labels: np.ndarray,
+    angles: np.ndarray,
+    n_angle_bins: int = 18,
+    n_permutations: int = 40,
+    rng: np.random.Generator | None = None,
+) -> dict:
+    """Association between discrete labels and angular sectors.
+
+    Builds a contingency table (label × angle-bin) and reports:
+    - normalized mutual information (NMI) in [0, 1]
+    - Cramér's V association in [0, 1]
+    - **null-permutation baseline** for fair cross-modulus comparison
+
+    Raw NMI tends to inflate with more distinct labels (e.g. m=333 vs m=9).
+    ``nmi_excess = nmi - nmi_null_mean`` subtracts the shuffle baseline so
+    larger moduli are not automatically "more resonant."
+
+    Higher excess / lock score ⇒ stronger true label–geometry lock.
+    """
+    labs = np.asarray(labels)
+    ang = np.asarray(angles, dtype=float)
+    if labs.size != ang.size or labs.size == 0:
+        raise ValueError("labels and angles must be same non-zero length")
+
+    uniq, inv = np.unique(labs, return_inverse=True)
+    n_lab = int(uniq.size)
+    angle_bins = np.floor(np.mod(ang, TWO_PI) / TWO_PI * n_angle_bins).astype(int)
+    angle_bins = np.clip(angle_bins, 0, n_angle_bins - 1)
+
+    mi, nmi, cramer_v, chi2_f = _contingency_mi_nmi(
+        inv, angle_bins, n_lab, n_angle_bins
+    )
+
+    # Permutation null: shuffle labels, keep angles fixed
+    null_nmis: list[float] = []
+    null_vs: list[float] = []
+    if n_permutations > 0:
+        gen = rng if rng is not None else np.random.default_rng(0)
+        inv_work = inv.copy()
+        for _ in range(int(n_permutations)):
+            gen.shuffle(inv_work)
+            _mi, nmi_n, v_n, _c = _contingency_mi_nmi(
+                inv_work, angle_bins, n_lab, n_angle_bins
+            )
+            null_nmis.append(nmi_n)
+            null_vs.append(v_n)
+
+    nmi_null_mean = float(np.mean(null_nmis)) if null_nmis else 0.0
+    nmi_null_std = float(np.std(null_nmis)) if null_nmis else 0.0
+    v_null_mean = float(np.mean(null_vs)) if null_vs else 0.0
+    nmi_excess = float(nmi - nmi_null_mean)
+    v_excess = float(cramer_v - v_null_mean)
+    # z-score vs null (how many σ above chance)
+    nmi_z = (
+        float((nmi - nmi_null_mean) / nmi_null_std) if nmi_null_std > 1e-12 else 0.0
+    )
+    # Fraction of nulls strictly below observed (empirical one-sided p complement)
+    if null_nmis:
+        nmi_p_ge = float(np.mean(np.asarray(null_nmis) >= nmi - 1e-15))
+    else:
+        nmi_p_ge = 1.0
 
     return {
         "n_labels": n_lab,
@@ -491,7 +542,15 @@ def label_angle_alignment(
         "mutual_information": float(mi),
         "nmi": nmi,
         "cramers_v": cramer_v,
-        "chi2_independence": float(chi2) if np.isfinite(chi2) else 0.0,
+        "chi2_independence": chi2_f,
+        "nmi_null_mean": nmi_null_mean,
+        "nmi_null_std": nmi_null_std,
+        "nmi_excess": nmi_excess,
+        "nmi_z": nmi_z,
+        "nmi_p_ge_null": nmi_p_ge,
+        "v_null_mean": v_null_mean,
+        "v_excess": v_excess,
+        "n_permutations": int(max(n_permutations, 0)),
     }
 
 
@@ -539,7 +598,12 @@ def orbit_stats(
     )
     geo = geometric_return_stats(step, num_steps=num_steps)
     sector = angular_sector_stats(angles, n_bins=n_bins)
-    align = label_angle_alignment(labels, angles, n_angle_bins=max(9, n_bins // 2))
+    align = label_angle_alignment(
+        labels,
+        angles,
+        n_angle_bins=max(9, n_bins // 2),
+        n_permutations=48,
+    )
 
     # Label visit balance (how evenly residues appear)
     lab_unique, lab_counts = np.unique(labels, return_counts=True)
@@ -583,9 +647,14 @@ def orbit_stats(
         "max_min_ratio": sector["max_min_ratio"],
         "resultant_length": sector["resultant_length"],
         "empty_bins": sector["empty_bins"],
-        # Resonance / co-structure
+        # Resonance / co-structure (raw + null-adjusted)
         "label_angle_nmi": align["nmi"],
         "label_angle_cramers_v": align["cramers_v"],
+        "nmi_null_mean": align["nmi_null_mean"],
+        "nmi_excess": align["nmi_excess"],
+        "nmi_z": align["nmi_z"],
+        "nmi_p_ge_null": align["nmi_p_ge_null"],
+        "v_excess": align["v_excess"],
         "label_entropy_ratio": label_entropy_ratio,
         "n_distinct_labels": int(lab_unique.size),
         # Practical symmetry metrics (src.analysis)
@@ -632,9 +701,13 @@ def resonance_scan(
 ) -> list[dict]:
     """Compare label–angle co-structure for 111-related (or given) moduli.
 
-    For each modulus, runs both step modes and ranks by
-    ``label_angle_nmi`` under ``m_over_pi`` (stronger ⇒ more resonance
-    between modular labels and the coupled winding).
+    Prefer ranking by ``nmi_excess`` (observed NMI − permutation-null mean)
+    under ``m_over_pi`` — fairer across moduli than raw NMI (which inflates
+    with label cardinality).
+
+    Also annotates:
+    - ``nmi_delta_vs_fixed`` — raw NMI(m/π) − NMI(9/π)
+    - ``nmi_excess_delta_vs_fixed`` — excess(m/π) − excess(9/π)
 
     Default moduli: :data:`FAMILY_111`.
     """
@@ -647,7 +720,6 @@ def resonance_scan(
         n_bins=n_bins,
         method=method,
     )
-    # Annotate delta NMI: m_over_pi − nine_over_pi for same m
     by_key: dict[tuple[int, str], dict] = {
         (r["modulus"], r["step_mode"]): r for r in rows
     }
@@ -656,9 +728,14 @@ def resonance_scan(
         fixed = by_key.get((m_i, "nine_over_pi"))
         coupled = by_key.get((m_i, "m_over_pi"))
         if fixed and coupled:
-            delta = coupled["label_angle_nmi"] - fixed["label_angle_nmi"]
-            coupled["nmi_delta_vs_fixed"] = float(delta)
+            coupled["nmi_delta_vs_fixed"] = float(
+                coupled["label_angle_nmi"] - fixed["label_angle_nmi"]
+            )
             fixed["nmi_delta_vs_fixed"] = 0.0
+            coupled["nmi_excess_delta_vs_fixed"] = float(
+                coupled.get("nmi_excess", 0.0) - fixed.get("nmi_excess", 0.0)
+            )
+            fixed["nmi_excess_delta_vs_fixed"] = 0.0
     return rows
 
 

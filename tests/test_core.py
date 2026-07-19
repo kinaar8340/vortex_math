@@ -320,9 +320,11 @@ class TestOrbitStats:
     def test_label_angle_alignment_range(self):
         ang = circle_angles(120)
         labs = labels_for_orbit(120, modulus=9)
-        a = label_angle_alignment(labs, ang, n_angle_bins=12)
+        a = label_angle_alignment(labs, ang, n_angle_bins=12, n_permutations=20)
         assert 0.0 <= a["nmi"] <= 1.0 + 1e-6
         assert 0.0 <= a["cramers_v"] <= 1.0 + 1e-6
+        assert "nmi_excess" in a
+        assert "nmi_null_mean" in a
 
     def test_orbit_stats_mod37(self):
         r = orbit_stats(37, "m_over_pi", num_steps=200)

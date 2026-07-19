@@ -114,3 +114,49 @@ class TestComposite:
         assert "symmetry_score" in r
         assert "angular_uniformity" in r
         assert "label_progression" in r
+        assert "nmi_excess" in r
+        assert "nmi_null_mean" in r
+        assert "nmi_z" in r
+
+
+class TestNMINullBaseline:
+    def test_shuffled_excess_near_zero(self):
+        from src.core import label_angle_alignment
+
+        rng = np.random.default_rng(1)
+        n = 300
+        angles = np.linspace(0, TWO_PI, n, endpoint=False)
+        # Labels independent of angle
+        labels = rng.integers(0, 37, size=n)
+        a = label_angle_alignment(labels, angles, n_angle_bins=18, n_permutations=30)
+        # Excess should be small for pure noise
+        assert abs(a["nmi_excess"]) < 0.08
+
+    def test_locked_labels_positive_excess(self):
+        from src.core import label_angle_alignment
+
+        n = 360
+        angles = np.linspace(0, TWO_PI, n, endpoint=False)
+        # Labels are angle bins → strong lock
+        labels = (angles / TWO_PI * 12).astype(int)
+        a = label_angle_alignment(labels, angles, n_angle_bins=12, n_permutations=30)
+        assert a["nmi_excess"] > 0.3
+        assert a["nmi_z"] > 3.0
+
+    def test_raw_nmi_inflates_with_cardinality_but_excess_comparable(self):
+        from src.core import circle_angles, labels_for_orbit, label_angle_alignment, step_radians_for
+
+        # Same geometry (fixed 9/π), labels mod 9 vs mod 333
+        n = 400
+        step = step_radians_for(9, "nine_over_pi")
+        angles = circle_angles(n, step)
+        lab9 = labels_for_orbit(n, step, method="mod", modulus=9)
+        lab333 = labels_for_orbit(n, step, method="mod", modulus=333)
+        a9 = label_angle_alignment(lab9, angles, n_permutations=24)
+        a333 = label_angle_alignment(lab333, angles, n_permutations=24)
+        # Raw NMI usually higher for more labels under same dense mixing
+        # Excess should not automatically crown 333 as strongly locked
+        assert a333["nmi"] >= a9["nmi"] - 0.05  # soft: cardinality bias on raw
+        # Both excesses should be modest (step_index/mod labels ≠ angle lock)
+        assert a9["nmi_excess"] < 0.25
+        assert a333["nmi_excess"] < 0.25

@@ -479,28 +479,29 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\n[{heading}]")
         hdr = (
             f"  {'m':>5}  {'mode':>12}  {'len×2':>6}  {'cyc':>4}  "
-            f"{'ret_k':>5}  {'ret_d':>7}  {'unif':>5}  {'prog':>5}  "
-            f"{'sym':>5}  {'NMI':>6}  {'ΔNMI':>6}"
+            f"{'unif':>5}  {'prog':>5}  {'sym':>5}  "
+            f"{'NMI':>6}  {'exNMI':>6}  {'z':>5}  {'Δex':>6}"
         )
         print(hdr)
         print("  " + "-" * (len(hdr) - 2))
         for r in rows:
-            delta = r.get("nmi_delta_vs_fixed", float("nan"))
-            delta_s = f"{delta:6.3f}" if delta == delta else f"{'—':>6}"
+            dex = r.get("nmi_excess_delta_vs_fixed", float("nan"))
+            dex_s = f"{dex:6.3f}" if dex == dex else f"{'—':>6}"
             print(
                 f"  {r['modulus']:>5}  {r['step_mode']:>12}  "
                 f"{r['length_from_1']:>6}  {r['num_cycles']:>4}  "
-                f"{r['best_return_k']:>5}  {r['best_return_dist']:>7.4f}  "
                 f"{r.get('angular_uniformity', float('nan')):>5.3f}  "
                 f"{r.get('label_progression', float('nan')):>5.3f}  "
                 f"{r.get('symmetry_score', float('nan')):>5.3f}  "
                 f"{r['label_angle_nmi']:>6.3f}  "
-                f"{delta_s}"
+                f"{r.get('nmi_excess', float('nan')):>6.3f}  "
+                f"{r.get('nmi_z', float('nan')):>5.1f}  "
+                f"{dex_s}"
             )
         print(
-            "  legend: len×2=×2 from 1; cyc=# cycles; ret_k/ret_d=near-return; "
-            "unif/prog/sym=analysis metrics; NMI=label–angle; "
-            "ΔNMI = m/π NMI − fixed NMI"
+            "  legend: unif/prog/sym=geometry+label order; "
+            "NMI=raw label–angle MI; exNMI=NMI−shuffle-null (fair lock); "
+            "z=σ above null; Δex=exNMI(m/π)−exNMI(fixed)"
         )
 
     if args.orbit_stats and not (args.family_37 or args.resonance_scan):
@@ -511,15 +512,19 @@ def main(argv: list[str] | None = None) -> int:
             num_steps=max(args.num_steps, 400),
             method=args.method,
         )
-        # attach delta
+        # attach deltas
         by_mode = {r["step_mode"]: r for r in rows}
         if "nine_over_pi" in by_mode and "m_over_pi" in by_mode:
-            d = (
+            by_mode["m_over_pi"]["nmi_delta_vs_fixed"] = (
                 by_mode["m_over_pi"]["label_angle_nmi"]
                 - by_mode["nine_over_pi"]["label_angle_nmi"]
             )
-            by_mode["m_over_pi"]["nmi_delta_vs_fixed"] = d
             by_mode["nine_over_pi"]["nmi_delta_vs_fixed"] = 0.0
+            by_mode["m_over_pi"]["nmi_excess_delta_vs_fixed"] = (
+                by_mode["m_over_pi"].get("nmi_excess", 0.0)
+                - by_mode["nine_over_pi"].get("nmi_excess", 0.0)
+            )
+            by_mode["nine_over_pi"]["nmi_excess_delta_vs_fixed"] = 0.0
         _print_orbit_table(rows, f"orbit-stats m={modulus}")
         out_bar = assets / f"orbit_stats_m{modulus}_nmi.png"
         fig_b = plot_orbit_stats_bars(
@@ -527,13 +532,27 @@ def main(argv: list[str] | None = None) -> int:
             metric="label_angle_nmi",
             style=args.style,
             save_path=out_bar,
-            title=f"Label–angle NMI · m={modulus}",
+            title=f"Raw label–angle NMI · m={modulus}",
         )
-        print(f"[orbit-stats] bar chart → {out_bar}")
+        print(f"[orbit-stats] raw NMI chart → {out_bar}")
         if args.show:
             plt.show()
         else:
             plt.close(fig_b)
+
+        out_ex = assets / f"orbit_stats_m{modulus}_nmi_excess.png"
+        fig_e = plot_orbit_stats_bars(
+            rows,
+            metric="nmi_excess",
+            style=args.style,
+            save_path=out_ex,
+            title=f"NMI excess (vs shuffle null) · m={modulus}",
+        )
+        print(f"[orbit-stats] NMI-excess chart → {out_ex}")
+        if args.show:
+            plt.show()
+        else:
+            plt.close(fig_e)
 
         out_sym = assets / f"orbit_stats_m{modulus}_symmetry.png"
         fig_s = plot_orbit_stats_bars(
@@ -570,18 +589,27 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\n[metrics-sweep] moduli={list(moduli)}  n={n_steps}  method={args.method}")
         print(format_metrics_table(rows_m))
 
-        # Rank by symmetry under m/π
+        # Rank by fair lock (nmi_excess) then by symmetry under m/π
         coupled = [r for r in rows_m if r["step_mode"] == "m_over_pi"]
-        coupled_sorted = sorted(
-            coupled, key=lambda r: r["symmetry_score"], reverse=True
+        by_excess = sorted(
+            coupled, key=lambda r: r.get("nmi_excess", 0.0), reverse=True
         )
+        print("\n[metrics-sweep] rank by nmi_excess under m/π (fair label–geometry lock):")
+        for i, r in enumerate(by_excess, 1):
+            print(
+                f"  {i}. m={r['modulus']:>4}  exNMI={r.get('nmi_excess', float('nan')):+.4f}  "
+                f"NMI={r.get('nmi', float('nan')):.4f}  null={r.get('nmi_null_mean', float('nan')):.4f}  "
+                f"z={r.get('nmi_z', float('nan')):.1f}  "
+                f"sym={r['symmetry_score']:.4f}  prog={r['label_progression']:.4f}"
+            )
+        by_sym = sorted(coupled, key=lambda r: r["symmetry_score"], reverse=True)
         print("\n[metrics-sweep] rank by symmetry_score under m/π:")
-        for i, r in enumerate(coupled_sorted, 1):
+        for i, r in enumerate(by_sym, 1):
             print(
                 f"  {i}. m={r['modulus']:>4}  sym={r['symmetry_score']:.4f}  "
                 f"unif={r['angular_uniformity']:.4f}  "
                 f"prog={r['label_progression']:.4f}  "
-                f"purity={r['sector_purity']:.4f}"
+                f"exNMI={r.get('nmi_excess', float('nan')):+.4f}"
             )
 
         out_sym = assets / f"metrics_symmetry_{tag}.png"
@@ -626,6 +654,20 @@ def main(argv: list[str] | None = None) -> int:
         else:
             plt.close(fig_p)
 
+        out_ex = assets / f"metrics_nmi_excess_{tag}.png"
+        fig_ex = plot_orbit_stats_bars(
+            rows_m,
+            metric="nmi_excess",
+            style=args.style,
+            save_path=out_ex,
+            title=f"NMI excess vs shuffle null · {tag}",
+        )
+        print(f"[metrics-sweep] NMI-excess chart → {out_ex}")
+        if args.show:
+            plt.show()
+        else:
+            plt.close(fig_ex)
+
     if args.family_37:
         n_stats = max(args.num_steps, 400)
         rows = family_orbit_report(
@@ -643,6 +685,10 @@ def main(argv: list[str] | None = None) -> int:
                     coupled["label_angle_nmi"] - fixed["label_angle_nmi"]
                 )
                 fixed["nmi_delta_vs_fixed"] = 0.0
+                coupled["nmi_excess_delta_vs_fixed"] = (
+                    coupled.get("nmi_excess", 0.0) - fixed.get("nmi_excess", 0.0)
+                )
+                fixed["nmi_excess_delta_vs_fixed"] = 0.0
         _print_orbit_table(rows, "family-37 orbit stats")
 
         out_c = assets / "family_37_circle.png"
@@ -681,13 +727,27 @@ def main(argv: list[str] | None = None) -> int:
             metric="label_angle_nmi",
             style=args.style,
             save_path=out_bar,
-            title="37-family · label–angle NMI (fixed 9/π vs m/π)",
+            title="37-family · raw NMI (fixed 9/π vs m/π)",
         )
-        print(f"[family-37] NMI bars → {out_bar}")
+        print(f"[family-37] raw NMI bars → {out_bar}")
         if args.show:
             plt.show()
         else:
             plt.close(fig_b)
+
+        out_ex = assets / "family_37_nmi_excess.png"
+        fig_ex = plot_orbit_stats_bars(
+            rows,
+            metric="nmi_excess",
+            style=args.style,
+            save_path=out_ex,
+            title="37-family · NMI excess vs shuffle null (fair lock)",
+        )
+        print(f"[family-37] NMI-excess bars → {out_ex}")
+        if args.show:
+            plt.show()
+        else:
+            plt.close(fig_ex)
 
         out_sym = assets / "family_37_symmetry.png"
         fig_s = plot_orbit_stats_bars(
@@ -744,18 +804,30 @@ def main(argv: list[str] | None = None) -> int:
         )
         _print_orbit_table(rows, "resonance-scan (FAMILY_111)")
 
-        # Rank coupled mode by NMI
+        # Rank by fair lock (nmi_excess), then show raw NMI for comparison
         coupled = [r for r in rows if r["step_mode"] == "m_over_pi"]
-        coupled_sorted = sorted(
-            coupled, key=lambda r: r["label_angle_nmi"], reverse=True
+        by_excess = sorted(
+            coupled, key=lambda r: r.get("nmi_excess", 0.0), reverse=True
         )
-        print("\n[resonance-scan] rank by NMI under m/π (higher ⇒ more label–angle lock):")
-        for i, r in enumerate(coupled_sorted, 1):
+        print(
+            "\n[resonance-scan] rank by nmi_excess under m/π "
+            "(fair label–geometry lock; higher ⇒ stronger than chance):"
+        )
+        for i, r in enumerate(by_excess, 1):
+            print(
+                f"  {i}. m={r['modulus']:>4}  exNMI={r.get('nmi_excess', float('nan')):+.4f}  "
+                f"NMI={r['label_angle_nmi']:.4f}  null={r.get('nmi_null_mean', float('nan')):.4f}  "
+                f"z={r.get('nmi_z', float('nan')):.1f}  "
+                f"Δex={r.get('nmi_excess_delta_vs_fixed', float('nan')):+.4f}  "
+                f"prog={r.get('label_progression', float('nan')):.3f}  "
+                f"×2len={r['length_from_1']}"
+            )
+        by_raw = sorted(coupled, key=lambda r: r["label_angle_nmi"], reverse=True)
+        print("\n[resonance-scan] rank by raw NMI under m/π (cardinality-biased):")
+        for i, r in enumerate(by_raw, 1):
             print(
                 f"  {i}. m={r['modulus']:>4}  NMI={r['label_angle_nmi']:.4f}  "
-                f"V={r['label_angle_cramers_v']:.4f}  "
-                f"ΔNMI={r.get('nmi_delta_vs_fixed', float('nan')):+.4f}  "
-                f"×2len={r['length_from_1']}"
+                f"exNMI={r.get('nmi_excess', float('nan')):+.4f}"
             )
 
         out_bar = assets / "resonance_scan_111_nmi.png"
@@ -764,13 +836,27 @@ def main(argv: list[str] | None = None) -> int:
             metric="label_angle_nmi",
             style=args.style,
             save_path=out_bar,
-            title="111-family resonance · label–angle NMI",
+            title="111-family · raw NMI (cardinality-biased)",
         )
-        print(f"[resonance-scan] NMI chart → {out_bar}")
+        print(f"[resonance-scan] raw NMI chart → {out_bar}")
         if args.show:
             plt.show()
         else:
             plt.close(fig_b)
+
+        out_ex = assets / "resonance_scan_111_nmi_excess.png"
+        fig_ex = plot_orbit_stats_bars(
+            rows,
+            metric="nmi_excess",
+            style=args.style,
+            save_path=out_ex,
+            title="111-family · NMI excess vs shuffle null (fair lock)",
+        )
+        print(f"[resonance-scan] NMI-excess chart → {out_ex}")
+        if args.show:
+            plt.show()
+        else:
+            plt.close(fig_ex)
 
         out_c = assets / "resonance_scan_111_circle.png"
         fig_c = plot_family_comparison(

@@ -11,6 +11,7 @@ Core scores (all in ~[0, 1] where higher is "cleaner" for the intended sense):
 - **sector_label_entropy** — within-sector label purity (high = mixed/segregated
   scale: normalized mean entropy; see function docs)
 - **symmetry_score** — weighted composite of uniformity + progression
+- **nmi_excess** — label–angle NMI above permutation null (fair lock score)
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ import numpy as np
 from .core import (
     TWO_PI,
     circle_angles,
+    label_angle_alignment,
     labels_for_orbit,
     step_radians_for,
 )
@@ -179,6 +181,7 @@ def compute_all_metrics(
     step_mode: str | None = None,
     method: str | None = None,
     num_steps: int | None = None,
+    n_permutations: int = 40,
 ) -> dict:
     """Compute the practical metric suite for one orbit sample.
 
@@ -189,15 +192,22 @@ def compute_all_metrics(
 
         - ``angular_uniformity``
         - ``label_progression``
-        - ``sector_label_entropy`` (mean normalized entropy; low = pure sectors)
-        - ``sector_purity`` (1 − entropy)
+        - ``sector_label_entropy`` / ``sector_purity``
         - ``symmetry_score``
+        - ``nmi`` / ``nmi_null_mean`` / ``nmi_excess`` / ``nmi_z``
         - ``sector_counts`` (list)
     """
     u, counts = angular_uniformity_score(angles, n_sectors=n_sectors)
     prog = label_progression_smoothness(labels, angles)
     disp = sector_label_dispersion(labels, angles, n_sectors=n_sectors)
     sym = symmetry_score(angles, labels, n_sectors=n_sectors)
+    # Angle bins ~ 1.5× sectors for contingency stability
+    align = label_angle_alignment(
+        np.asarray(labels),
+        np.asarray(angles, dtype=float),
+        n_angle_bins=max(9, int(n_sectors * 1.5)),
+        n_permutations=n_permutations,
+    )
 
     out: dict = {
         "modulus": int(modulus),
@@ -206,6 +216,12 @@ def compute_all_metrics(
         "sector_label_entropy": disp["mean_normalized_entropy"],
         "sector_purity": disp["purity"],
         "symmetry_score": sym,
+        "nmi": align["nmi"],
+        "nmi_null_mean": align["nmi_null_mean"],
+        "nmi_excess": align["nmi_excess"],
+        "nmi_z": align["nmi_z"],
+        "nmi_p_ge_null": align["nmi_p_ge_null"],
+        "v_excess": align["v_excess"],
         "n_sectors": int(n_sectors),
         "sector_counts": counts.tolist(),
     }
@@ -272,20 +288,25 @@ def format_metrics_table(rows: Sequence[dict]) -> str:
     """Pretty text table for CLI output."""
     lines = [
         f"  {'m':>5}  {'mode':>12}  {'unif':>6}  {'prog':>6}  "
-        f"{'purity':>6}  {'sym':>6}",
-        "  " + "-" * 52,
+        f"{'sym':>6}  {'NMI':>6}  {'null':>6}  {'exNMI':>6}  {'z':>6}",
+        "  " + "-" * 72,
     ]
     for r in rows:
         mode = str(r.get("step_mode", "—"))
+        nmi = r.get("nmi", r.get("label_angle_nmi", float("nan")))
+        null = r.get("nmi_null_mean", float("nan"))
+        excess = r.get("nmi_excess", float("nan"))
+        z = r.get("nmi_z", float("nan"))
         lines.append(
             f"  {int(r['modulus']):>5}  {mode:>12}  "
             f"{r['angular_uniformity']:>6.3f}  "
             f"{r['label_progression']:>6.3f}  "
-            f"{r['sector_purity']:>6.3f}  "
-            f"{r['symmetry_score']:>6.3f}"
+            f"{r['symmetry_score']:>6.3f}  "
+            f"{nmi:>6.3f}  {null:>6.3f}  {excess:>6.3f}  {z:>6.2f}"
         )
     lines.append(
         "  legend: unif=angular uniformity; prog=label progression; "
-        "purity=sector label purity; sym=0.6·unif+0.4·prog"
+        "sym=0.6·unif+0.4·prog; NMI=raw label–angle; null=shuffle baseline; "
+        "exNMI=NMI−null (fair lock); z=σ above null"
     )
     return "\n".join(lines)
