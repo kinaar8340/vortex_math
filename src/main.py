@@ -5,12 +5,11 @@ CLI entry point for vortex math unit-circle visualizations.
 Examples
 --------
     python src/main.py --plot-steps --num-steps 100
+    python src/main.py --plot-steps -m 37 --step-mode m_over_pi
+    python src/main.py --plot-steps -m 37 --method paired
+    python src/main.py --sweep-moduli --step-mode m_over_pi --sweep-views circle,density,torus
+    python src/main.py --sweep-moduli --extended
     python src/main.py --torus --steps 300
-    python src/main.py --animate-torus --steps 300
-    python src/main.py --animate-torus --4k --steps 400 --fps 30
-    python src/main.py --animate-torus --mode spin --steps 300
-    python src/main.py --animate --steps 300 --save-gif
-    python src/main.py --interactive
     python src/main.py --demo
 """
 
@@ -42,6 +41,8 @@ from src.core import (
     digital_root,
     doubling_orbit,
     modulus_sweep_report,
+    resolve_moduli,
+    step_radians_for,
     vortex_doubling_sequence,
 )
 from src.visualize import (
@@ -50,21 +51,26 @@ from src.visualize import (
     animate_torus_projection,
     generate_default_assets,
     plot_density_heatmap,
+    plot_density_modulus_comparison,
     plot_interactive_plotly,
     plot_modulus_comparison,
+    plot_paired_label_orbit,
+    plot_torus_modulus_comparison,
     plot_torus_projection,
     plot_unit_circle_with_steps,
     plot_vortex_flow_on_circle,
 )
 
 
-def _parse_step(value: str | None) -> float:
+def _parse_explicit_step(value: str | None) -> float | None:
+    """Parse --step if given; None means 'use step_mode'."""
     if value is None:
-        return DEFAULT_STEP_RADIANS
-    # Allow "9/pi" style strings
+        return None
     v = value.strip().lower().replace(" ", "")
     if v in {"9/pi", "9/π", "default"}:
         return DEFAULT_STEP_RADIANS
+    if v in {"m/pi", "m/π"}:
+        return None  # signal: use m_over_pi via step_mode
     return float(value)
 
 
@@ -118,14 +124,32 @@ def build_parser() -> argparse.ArgumentParser:
         "--step",
         type=str,
         default=None,
-        help="Step in radians (float or '9/pi'). Default: 9/π",
+        help="Explicit step in radians (float or '9/pi'). Overrides step-mode when set.",
+    )
+    p.add_argument(
+        "--step-mode",
+        type=str,
+        default="nine_over_pi",
+        choices=["nine_over_pi", "m_over_pi", "9_over_pi"],
+        help=(
+            "Geometric step policy: nine_over_pi (default, decoupled) or "
+            "m_over_pi (couple winding rate to --modulus)"
+        ),
     )
     p.add_argument(
         "--method",
         type=str,
         default="step_index",
-        choices=["step_index", "angle_bin", "sin_dr", "cos_dr", "doubling_cycle", "mod"],
-        help="Angle/index → label mapping",
+        choices=[
+            "step_index",
+            "angle_bin",
+            "sin_dr",
+            "cos_dr",
+            "doubling_cycle",
+            "mod",
+            "paired",
+        ],
+        help="Angle/index → label mapping (paired = CRT digital_root × k%%m)",
     )
     p.add_argument(
         "--modulus",
@@ -133,17 +157,36 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_LABEL_MODULUS,
         help=(
-            "Labeling modulus only (geometry stays 9/π unless --step is set). "
-            "Try 9, 37, 111, 333."
+            "Labeling modulus (and m/π step when --step-mode m_over_pi). "
+            "Try 7, 9, 13, 27, 37, 41, 111, 333."
         ),
     )
     p.add_argument(
         "--sweep-moduli",
         action="store_true",
         help=(
-            "Print doubling-cycle structure for suggested moduli "
-            f"{list(SUGGESTED_MODULI)} and save a side-by-side comparison plot"
+            "Print doubling-cycle structure and comparison plots for moduli "
+            f"{list(SUGGESTED_MODULI)} (see --extended, --sweep-views)"
         ),
+    )
+    p.add_argument(
+        "--extended",
+        action="store_true",
+        help="With --sweep-moduli: also include 7, 13, 27, 41",
+    )
+    p.add_argument(
+        "--sweep-views",
+        type=str,
+        default="circle",
+        help=(
+            "Comma list of sweep figures: circle, density, torus, all. "
+            "Example: circle,density,torus"
+        ),
+    )
+    p.add_argument(
+        "--paired-panel",
+        action="store_true",
+        help="Save dual-panel CRT plot (digital root | k%%m | packed) for --modulus",
     )
     p.add_argument(
         "--style",
@@ -230,7 +273,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    step = _parse_step(args.step)
     assets = Path(args.assets_dir)
     assets.mkdir(parents=True, exist_ok=True)
 
@@ -246,6 +288,7 @@ def main(argv: list[str] | None = None) -> int:
             args.interactive,
             args.demo,
             args.sweep_moduli,
+            args.paired_panel,
         ]
     )
     if not actions:
@@ -256,9 +299,34 @@ def main(argv: list[str] | None = None) -> int:
         print("error: --modulus must be positive", file=sys.stderr)
         return 2
 
+    # Normalize step mode aliases
+    step_mode = args.step_mode.replace("-", "_")
+    if step_mode == "9_over_pi":
+        step_mode = "nine_over_pi"
+
+    explicit = _parse_explicit_step(args.step)
+    if args.step is not None and args.step.strip().lower().replace(" ", "") in {
+        "m/pi",
+        "m/π",
+    }:
+        step_mode = "m_over_pi"
+        explicit = None
+
+    step = step_radians_for(
+        modulus=modulus,
+        step_mode=step_mode,
+        explicit=explicit,
+    )
+
     print("Vortex Math Unit Circle")
-    print(f"  step = {step:.8f} rad  (default 9/π ≈ {DEFAULT_STEP_RADIANS:.8f})")
-    print(f"  label modulus m = {modulus}  (geometry independent of m)")
+    print(f"  step_mode = {step_mode}")
+    print(f"  step = {step:.8f} rad  (9/π ≈ {DEFAULT_STEP_RADIANS:.8f})")
+    print(f"  label modulus m = {modulus}")
+    if step_mode == "nine_over_pi" and explicit is None:
+        print("  note: geometry decoupled from m (labels only)")
+    elif step_mode == "m_over_pi":
+        print(f"  note: geometry coupled — Δθ = m/π = {modulus}/π")
+    print(f"  method = {args.method}")
     print(f"  doubling cycle sample (m=9): {vortex_doubling_sequence(12)}")
     orbit_m, len_m = doubling_orbit(1, modulus)
     print(f"  ×2 orbit from 1 mod {modulus}: len={len_m}  prefix={orbit_m[:12]}")
@@ -266,26 +334,93 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  assets → {assets.resolve()}")
 
     if args.sweep_moduli:
+        moduli = resolve_moduli(extended=args.extended)
         print("\n[sweep-moduli] Doubling structure (×2 on Z/mZ):")
+        print(f"  moduli = {list(moduli)}")
+        print(f"  step_mode = {step_mode}")
         print(f"  {'m':>6}  {'len_from_1':>10}  {'num_cycles':>10}  {'cycle_lengths'}")
-        for row in modulus_sweep_report():
+        for row in modulus_sweep_report(moduli):
             print(
                 f"  {row['modulus']:>6}  {row['length_from_1']:>10}  "
                 f"{row['num_cycles']:>10}  {row['cycle_lengths']}"
             )
-        out = Path(args.out) if args.out else assets / "modulus_comparison.png"
-        fig = plot_modulus_comparison(
-            num_steps=max(args.num_steps, 100),
+
+        views_raw = args.sweep_views.strip().lower()
+        if views_raw == "all":
+            views = {"circle", "density", "torus"}
+        else:
+            views = {v.strip() for v in views_raw.split(",") if v.strip()}
+
+        tag = "m_over_pi" if step_mode == "m_over_pi" else "fixed9"
+        if args.extended:
+            tag += "_ext"
+
+        if "circle" in views:
+            out = (
+                Path(args.out)
+                if args.out and len(views) == 1
+                else assets / f"modulus_comparison_{tag}.png"
+            )
+            fig = plot_modulus_comparison(
+                moduli=moduli,
+                num_steps=max(args.num_steps, 100),
+                step=step if step_mode == "nine_over_pi" else None,
+                step_mode=step_mode,
+                method=args.method,
+                style=args.style,
+                save_path=out,
+            )
+            print(f"[sweep-moduli] circle comparison → {out}")
+            if args.show:
+                plt.show()
+            else:
+                plt.close(fig)
+
+        if "density" in views:
+            out_d = assets / f"modulus_density_{tag}.png"
+            fig_d = plot_density_modulus_comparison(
+                moduli=moduli,
+                num_steps=max(args.num_steps, 1500),
+                step_mode=step_mode,
+                style=args.style,
+                save_path=out_d,
+            )
+            print(f"[sweep-moduli] density comparison → {out_d}")
+            if args.show:
+                plt.show()
+            else:
+                plt.close(fig_d)
+
+        if "torus" in views:
+            out_t = assets / f"modulus_torus_{tag}.png"
+            fig_t = plot_torus_modulus_comparison(
+                moduli=moduli,
+                num_steps=max(args.num_steps, 150),
+                step_mode=step_mode,
+                method=args.method,
+                style=args.style,
+                save_path=out_t,
+            )
+            print(f"[sweep-moduli] torus comparison → {out_t}")
+            if args.show:
+                plt.show()
+            else:
+                plt.close(fig_t)
+
+    if args.paired_panel:
+        out_p = Path(args.out) if args.out else assets / f"paired_labels_m{modulus}.png"
+        fig_p = plot_paired_label_orbit(
+            num_steps=max(args.num_steps, 120),
             step=step,
-            method=args.method,
+            modulus=modulus,
             style=args.style,
-            save_path=out,
+            save_path=out_p,
         )
-        print(f"[sweep-moduli] comparison plot → {out}")
+        print(f"[paired-panel] saved → {out_p}")
         if args.show:
             plt.show()
         else:
-            plt.close(fig)
+            plt.close(fig_p)
 
     if args.demo:
         print("\n[demo] Generating default assets…")
@@ -294,9 +429,18 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {name}: {path}")
 
     if args.plot_steps:
-        out = Path(args.out) if args.out else assets / f"unit_circle_steps_m{modulus}.png"
-        if args.out is None and modulus == DEFAULT_LABEL_MODULUS:
-            out = assets / "unit_circle_steps.png"
+        if args.out:
+            out = Path(args.out)
+        else:
+            parts = [f"m{modulus}"]
+            if step_mode == "m_over_pi":
+                parts.append("step_m_over_pi")
+            if args.method != "step_index":
+                parts.append(args.method)
+            if modulus == DEFAULT_LABEL_MODULUS and step_mode == "nine_over_pi" and args.method == "step_index":
+                out = assets / "unit_circle_steps.png"
+            else:
+                out = assets / f"unit_circle_steps_{'_'.join(parts)}.png"
         fig = plot_unit_circle_with_steps(
             num_steps=args.num_steps,
             step=step,

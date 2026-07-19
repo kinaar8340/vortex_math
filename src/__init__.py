@@ -6,8 +6,10 @@ and the special role of 3-6-9).
 """
 
 from .core import (
+    CORE_MODULI,
     DEFAULT_LABEL_MODULUS,
     DEFAULT_STEP_RADIANS,
+    EXTENDED_MODULI,
     SUGGESTED_MODULI,
     TRINITY_DIGITS,
     VORTEX_CYCLE,
@@ -16,14 +18,18 @@ from .core import (
     doubling_orbit,
     labels_for_orbit,
     modular_label,
+    paired_label,
     position_to_label,
     position_to_vortex_digit,
+    step_radians_for,
     vortex_doubling_sequence,
 )
 
 __all__ = [
+    "CORE_MODULI",
     "DEFAULT_LABEL_MODULUS",
     "DEFAULT_STEP_RADIANS",
+    "EXTENDED_MODULI",
     "SUGGESTED_MODULI",
     "TRINITY_DIGITS",
     "VORTEX_CYCLE",
@@ -32,8 +38,10 @@ __all__ = [
     "doubling_orbit",
     "labels_for_orbit",
     "modular_label",
+    "paired_label",
     "position_to_label",
     "position_to_vortex_digit",
+    "step_radians_for",
     "vortex_doubling_sequence",
 ]
 

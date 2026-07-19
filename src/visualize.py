@@ -40,6 +40,8 @@ from .core import (
     doubling_orbit,
     labels_for_orbit,
     modulus_sweep_report,
+    resolve_moduli,
+    step_radians_for,
     vortex_number_circle_coords,
 )
 
@@ -468,25 +470,38 @@ def vortex_colormap() -> ListedColormap:
     return ListedColormap(VORTEX_PALETTE_9)
 
 
-def label_colormap(modulus: int = DEFAULT_LABEL_MODULUS):
+def label_colormap(modulus: int = DEFAULT_LABEL_MODULUS, method: str = "step_index"):
     """Colormap suited to labeling modulus ``m`` (categorical 9 vs continuous)."""
-    if modulus == 9:
+    if method == "paired":
+        return plt.get_cmap("turbo")
+    if modulus == 9 and method not in {"mod", "paired"}:
         return vortex_colormap()
     # Continuous map works for large m (37, 111, 333).
     return plt.get_cmap("turbo")
 
 
-def _label_vmin_vmax(labels: np.ndarray, modulus: int) -> tuple[float, float]:
-    """Color limits for scatter / colorbar given classic (1–9) vs modular (0..m-1)."""
-    if modulus == 9 and labels.size and int(labels.min()) >= 1:
+def _label_vmin_vmax(
+    labels: np.ndarray,
+    modulus: int,
+    method: str = "step_index",
+) -> tuple[float, float]:
+    """Color limits for scatter / colorbar given classic, modular, or paired labels."""
+    if method == "paired":
+        # packed = (dr-1)*m + r  →  0 .. 9m-1
+        return -0.5, float(9 * modulus) - 0.5
+    if modulus == 9 and labels.size and int(labels.min()) >= 1 and method != "mod":
         return 0.5, 9.5
     return -0.5, float(modulus) - 0.5
 
 
-def _digit_colors(digits: np.ndarray, modulus: int = DEFAULT_LABEL_MODULUS) -> np.ndarray:
+def _digit_colors(
+    digits: np.ndarray,
+    modulus: int = DEFAULT_LABEL_MODULUS,
+    method: str = "step_index",
+) -> np.ndarray:
     """Map label array to RGBA."""
-    cmap = label_colormap(modulus)
-    vmin, vmax = _label_vmin_vmax(digits, modulus)
+    cmap = label_colormap(modulus, method=method)
+    vmin, vmax = _label_vmin_vmax(digits, modulus, method=method)
     span = max(vmax - vmin, 1e-9)
     normed = (digits.astype(float) - vmin) / span
     return cmap(np.clip(normed, 0.0, 1.0))
@@ -560,7 +575,7 @@ def plot_unit_circle_with_steps(
 
     x, y = circle_positions(num_steps, step)
     digits = labels_for_orbit(num_steps, step, method=method, modulus=modulus)
-    point_colors = _digit_colors(digits, modulus=modulus)
+    point_colors = _digit_colors(digits, modulus=modulus, method=method)
 
     # Unit circle guide
     theta = np.linspace(0, TWO_PI, 400)
@@ -576,16 +591,16 @@ def plot_unit_circle_with_steps(
     # Stepped points
     sizes = np.full(num_steps, 36.0)
     # Emphasize 3-6-9 slightly larger (only meaningful for classic digits)
-    if modulus == 9:
+    if modulus == 9 and method not in {"mod", "paired"}:
         for t in TRINITY_DIGITS:
             sizes[digits == t] = 55.0
 
-    vmin, vmax = _label_vmin_vmax(digits, modulus)
+    vmin, vmax = _label_vmin_vmax(digits, modulus, method=method)
     sc = ax.scatter(
         x,
         y,
         c=digits,
-        cmap=label_colormap(modulus),
+        cmap=label_colormap(modulus, method=method),
         vmin=vmin,
         vmax=vmax,
         s=sizes,
@@ -594,7 +609,10 @@ def plot_unit_circle_with_steps(
         alpha=0.9,
         zorder=5,
     )
-    if modulus == 9:
+    if method == "paired":
+        cbar = fig.colorbar(sc, ax=ax, fraction=0.046, pad=0.04)
+        cbar.set_label(f"paired (dr, k% {modulus})")
+    elif modulus == 9 and method != "mod":
         cbar = fig.colorbar(sc, ax=ax, ticks=range(1, 10), fraction=0.046, pad=0.04)
         cbar.set_label("Vortex digit")
     else:
@@ -634,7 +652,7 @@ def plot_unit_circle_with_steps(
 
     if title is None:
         title = (
-            f"Unit circle · step = 9/π ≈ {step:.5f} rad · "
+            f"Unit circle · Δθ ≈ {step:.5f} rad · "
             f"n = {num_steps} · map = {method} · m = {modulus}"
         )
     ax.set_title(title, fontsize=11, pad=12)
@@ -776,12 +794,12 @@ def plot_vortex_flow_on_circle(
     ax_right.plot(np.cos(theta), np.sin(theta), color=colors_meta["grid"], lw=1.0, alpha=0.7)
     # Path polyline
     ax_right.plot(x, y, color=colors_meta["grid"], lw=0.6, alpha=0.35, zorder=2)
-    vmin, vmax = _label_vmin_vmax(digits, modulus)
+    vmin, vmax = _label_vmin_vmax(digits, modulus, method=method)
     sc = ax_right.scatter(
         x,
         y,
         c=digits,
-        cmap=label_colormap(modulus),
+        cmap=label_colormap(modulus, method=method),
         vmin=vmin,
         vmax=vmax,
         s=40,
@@ -789,7 +807,7 @@ def plot_vortex_flow_on_circle(
         linewidths=0.3,
         zorder=5,
     )
-    if modulus == 9:
+    if modulus == 9 and method not in {"mod", "paired"}:
         fig.colorbar(sc, ax=ax_right, ticks=range(1, 10), fraction=0.046, pad=0.04)
     else:
         fig.colorbar(sc, ax=ax_right, fraction=0.046, pad=0.04)
@@ -899,14 +917,19 @@ def animate_circle_steps(
     colors_meta = apply_style(style)
     x, y = circle_positions(num_steps, step)
     digits = labels_for_orbit(num_steps, step, method=method, modulus=modulus)
-    rgba = _digit_colors(digits, modulus=modulus)
+    rgba = _digit_colors(digits, modulus=modulus, method=method)
 
     fig, ax = plt.subplots(figsize=figsize)
     th = np.linspace(0, TWO_PI, 400)
     ax.plot(np.cos(th), np.sin(th), color=colors_meta["grid"], lw=1.0, alpha=0.7)
-    _draw_vortex_number_overlay(
-        ax, radius=1.25, show_doubling_star=True, fg=colors_meta["fg"], grid=colors_meta["grid"]
-    )
+    if modulus == 9 and method not in {"mod", "paired"}:
+        _draw_vortex_number_overlay(
+            ax,
+            radius=1.25,
+            show_doubling_star=True,
+            fg=colors_meta["fg"],
+            grid=colors_meta["grid"],
+        )
 
     path_line, = ax.plot([], [], color=colors_meta["grid"], lw=0.7, alpha=0.4, zorder=2)
     scat = ax.scatter([], [], s=40, zorder=5)
@@ -1002,8 +1025,15 @@ def plot_interactive_plotly(
         step_options.append(num_steps)
         step_options = sorted(set(step_options))
 
-    cmin, cmax = (1, 9) if modulus == 9 else (0, modulus - 1)
-    cbar_title = "digit" if modulus == 9 else f"mod {modulus}"
+    if method == "paired":
+        cmin, cmax = 0, 9 * modulus - 1
+        cbar_title = f"paired m={modulus}"
+    elif modulus == 9 and method != "mod":
+        cmin, cmax = 1, 9
+        cbar_title = "digit"
+    else:
+        cmin, cmax = 0, modulus - 1
+        cbar_title = f"mod {modulus}"
 
     frames = []
     for n in step_options:
@@ -1291,13 +1321,13 @@ def plot_torus_projection(
     ax.plot(x, y, z, color=path_color, linewidth=0.85, alpha=0.40, zorder=1)
 
     # Points: larger, white edge “glow”, colored by modular / vortex label
-    vmin, vmax = _label_vmin_vmax(digits, modulus)
+    vmin, vmax = _label_vmin_vmax(digits, modulus, method=method)
     scatter = ax.scatter(
         x,
         y,
         z,
         c=digits,
-        cmap=label_colormap(modulus),
+        cmap=label_colormap(modulus, method=method),
         vmin=vmin,
         vmax=vmax,
         s=38,
@@ -1307,7 +1337,10 @@ def plot_torus_projection(
         depthshade=True,
         zorder=5,
     )
-    if modulus == 9:
+    if method == "paired":
+        cbar = fig.colorbar(scatter, ax=ax, shrink=0.6, pad=0.08)
+        cbar.set_label(f"paired (dr, k%{modulus})")
+    elif modulus == 9 and method != "mod":
         cbar = fig.colorbar(scatter, ax=ax, shrink=0.6, pad=0.08, ticks=range(1, 10))
         cbar.set_label("Vortex digit")
     else:
@@ -1433,7 +1466,7 @@ def animate_torus_projection(
     apply_style(style)
     x, y, z = _torus_orbit_coords(num_steps, step, R, r, phi_scale=phi_scale)
     digits = labels_for_orbit(num_steps, step, method=method, modulus=modulus)
-    rgba = _digit_colors(digits, modulus=modulus)
+    rgba = _digit_colors(digits, modulus=modulus, method=method)
 
     # Strict timeline: construct ALL steps → hold → accelerate-rotate
     # Camera does not spin until construction (and hold) are finished.
@@ -1736,7 +1769,8 @@ def animate_torus_projection(
 def plot_modulus_comparison(
     moduli: Sequence[int] | None = None,
     num_steps: int = 120,
-    step: float = DEFAULT_STEP_RADIANS,
+    step: float | None = None,
+    step_mode: str = "nine_over_pi",
     method: str = "step_index",
     style: Literal["dark", "light"] = "dark",
     save_path: str | Path | None = None,
@@ -1744,57 +1778,278 @@ def plot_modulus_comparison(
 ) -> Figure:
     """Side-by-side unit-circle orbits for several labeling moduli.
 
-    Geometry is fixed (default ``9/π``). Only the discrete label set
-    changes — the practical way to see mechanism swap for m ∈ {9, 37, 111, 333}.
+    With ``step_mode="nine_over_pi"`` (default), geometry is fixed at 9/π and
+    only labels change. With ``step_mode="m_over_pi"``, each panel uses its own
+    arc step ``m/π`` so winding rate couples to the modulus.
     """
     if moduli is None:
         moduli = list(SUGGESTED_MODULI)
     n = len(moduli)
     if figsize is None:
-        figsize = (4.2 * n, 4.4)
+        figsize = (4.2 * min(n, 6), 4.4 * ((n + 5) // 6) if n > 6 else 4.4)
 
     colors_meta = apply_style(style)
-    fig, axes = plt.subplots(1, n, figsize=figsize, squeeze=False)
-    axes_row = axes[0]
+    # Wrap to multiple rows when extended modulus list is long
+    ncols = min(n, 4)
+    nrows = (n + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows, ncols, figsize=(4.2 * ncols, 4.3 * nrows), squeeze=False)
+    flat_axes = axes.ravel()
 
-    x, y = circle_positions(num_steps, step)
     th = np.linspace(0, TWO_PI, 400)
     cx, cy = np.cos(th), np.sin(th)
 
-    for ax, m in zip(axes_row, moduli):
-        labels = labels_for_orbit(num_steps, step, method=method, modulus=int(m))
-        vmin, vmax = _label_vmin_vmax(labels, int(m))
+    for idx, m in enumerate(moduli):
+        ax = flat_axes[idx]
+        m_i = int(m)
+        # m/π always couples; fixed mode uses shared step (default 9/π).
+        if step_mode == "m_over_pi":
+            step_m = step_radians_for(m_i, step_mode="m_over_pi")
+        elif step is not None:
+            step_m = float(step)
+        else:
+            step_m = step_radians_for(m_i, step_mode="nine_over_pi")
+
+        x, y = circle_positions(num_steps, step_m)
+        labels = labels_for_orbit(num_steps, step_m, method=method, modulus=m_i)
+        vmin, vmax = _label_vmin_vmax(labels, m_i, method=method)
         ax.plot(cx, cy, color=colors_meta["grid"], lw=0.9, alpha=0.7)
         sc = ax.scatter(
             x,
             y,
             c=labels,
-            cmap=label_colormap(int(m)),
+            cmap=label_colormap(m_i, method=method),
             vmin=vmin,
             vmax=vmax,
-            s=22,
+            s=18 if n > 4 else 22,
             edgecolors=colors_meta["fg"],
-            linewidths=0.2,
+            linewidths=0.15,
             alpha=0.9,
             zorder=5,
         )
-        info = doubling_cycle_structure(int(m))
-        orbit_1, len_1 = doubling_orbit(1, int(m))
+        info = doubling_cycle_structure(m_i)
+        _, len_1 = doubling_orbit(1, m_i)
         ax.set_aspect("equal")
         ax.set_xlim(-1.15, 1.15)
         ax.set_ylim(-1.15, 1.15)
         ax.set_title(
-            f"m = {m}\n×2 from 1: len {len_1} · cycles {info['num_cycles']}",
-            fontsize=9,
+            f"m = {m_i} · Δθ≈{step_m:.3f}\n×2: len {len_1} · cycles {info['num_cycles']}",
+            fontsize=8,
         )
         ax.set_xticks([])
         ax.set_yticks([])
         fig.colorbar(sc, ax=ax, fraction=0.046, pad=0.04)
 
+    for j in range(n, len(flat_axes)):
+        flat_axes[j].axis("off")
+
+    mode_note = (
+        "step = m/π (coupled)"
+        if step_mode == "m_over_pi"
+        else "step fixed (default 9/π)"
+    )
     fig.suptitle(
-        f"Labeling modulus sweep · geometric step fixed at 9/π · method={method} · n={num_steps}",
+        f"Modulus sweep · {mode_note} · method={method} · n={num_steps}",
         fontsize=11,
-        y=1.02,
+        y=1.01,
+    )
+    fig.tight_layout()
+    if save_path is not None:
+        path = Path(save_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(path, dpi=160, bbox_inches="tight")
+    return fig
+
+
+def plot_density_modulus_comparison(
+    moduli: Sequence[int] | None = None,
+    num_steps: int = 2000,
+    step_mode: str = "nine_over_pi",
+    n_bins: int = 72,
+    style: Literal["dark", "light"] = "dark",
+    save_path: str | Path | None = None,
+) -> Figure:
+    """Angular histograms side-by-side for each modulus / step mode.
+
+    Density depends only on geometry (step), not labels — so differences
+    appear when ``step_mode="m_over_pi"``. With fixed 9/π all panels match.
+    """
+    if moduli is None:
+        moduli = list(SUGGESTED_MODULI)
+    n = len(moduli)
+    colors_meta = apply_style(style)
+    ncols = min(n, 4)
+    nrows = (n + ncols - 1) // ncols
+    fig, axes = plt.subplots(
+        nrows, ncols, figsize=(3.8 * ncols, 3.2 * nrows), squeeze=False
+    )
+    flat = axes.ravel()
+
+    for idx, m in enumerate(moduli):
+        ax = flat[idx]
+        m_i = int(m)
+        step_m = step_radians_for(m_i, step_mode=step_mode)
+        angles = circle_angles(num_steps, step_m)
+        ax.hist(
+            angles,
+            bins=n_bins,
+            range=(0, TWO_PI),
+            color="#58a6ff",
+            edgecolor=colors_meta["grid"],
+            alpha=0.85,
+        )
+        ax.set_xlim(0, TWO_PI)
+        ax.set_title(f"m={m_i} · Δθ≈{step_m:.4f}", fontsize=9)
+        ax.set_xlabel("θ")
+        if idx % ncols == 0:
+            ax.set_ylabel("count")
+
+    for j in range(n, len(flat)):
+        flat[j].axis("off")
+
+    mode_note = "m/π steps" if step_mode == "m_over_pi" else "fixed 9/π"
+    fig.suptitle(
+        f"Angular density by modulus · {mode_note} · n={num_steps}",
+        fontsize=11,
+    )
+    fig.tight_layout()
+    if save_path is not None:
+        path = Path(save_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(path, dpi=160, bbox_inches="tight")
+    return fig
+
+
+def plot_torus_modulus_comparison(
+    moduli: Sequence[int] | None = None,
+    num_steps: int = 200,
+    step_mode: str = "nine_over_pi",
+    method: str = "step_index",
+    R: float = 2.5,
+    r: float = 1.0,
+    phi_scale: float = 3.0,
+    style: Literal["dark", "light"] = "dark",
+    save_path: str | Path | None = None,
+) -> Figure:
+    """Small-multiple torus projections for modulus / step-mode experiments."""
+    if moduli is None:
+        moduli = list(SUGGESTED_MODULI)
+    n = len(moduli)
+    apply_style(style)
+    ncols = min(n, 4)
+    nrows = (n + ncols - 1) // ncols
+    fig = plt.figure(figsize=(4.0 * ncols, 3.8 * nrows))
+
+    for idx, m in enumerate(moduli):
+        ax = fig.add_subplot(nrows, ncols, idx + 1, projection="3d")
+        m_i = int(m)
+        step_m = step_radians_for(m_i, step_mode=step_mode)
+        x, y, z = _torus_orbit_coords(num_steps, step_m, R, r, phi_scale=phi_scale)
+        labels = labels_for_orbit(num_steps, step_m, method=method, modulus=m_i)
+        vmin, vmax = _label_vmin_vmax(labels, m_i, method=method)
+        wire = "black" if style == "dark" else "#1a1a1a"
+        _draw_torus_wireframe(
+            ax, R, r, color=wire, linewidth=0.4, alpha=0.25, n_u=28, n_v=14, rstride=3, cstride=3
+        )
+        ax.plot(x, y, z, color="#888", lw=0.5, alpha=0.35)
+        ax.scatter(
+            x,
+            y,
+            z,
+            c=labels,
+            cmap=label_colormap(m_i, method=method),
+            vmin=vmin,
+            vmax=vmax,
+            s=10,
+            alpha=0.9,
+            edgecolors="none",
+            depthshade=False,
+        )
+        ax.view_init(elev=90, azim=0)
+        ax.set_title(f"m={m_i} · Δθ≈{step_m:.3f}", fontsize=9)
+        ax.set_axis_off()
+
+    mode_note = "m/π" if step_mode == "m_over_pi" else "9/π fixed"
+    fig.suptitle(
+        f"Torus modulus sweep · {mode_note} · method={method} · n={num_steps}",
+        fontsize=11,
+    )
+    fig.tight_layout()
+    if save_path is not None:
+        path = Path(save_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(path, dpi=140, bbox_inches="tight")
+    return fig
+
+
+def plot_paired_label_orbit(
+    num_steps: int = 150,
+    step: float = DEFAULT_STEP_RADIANS,
+    modulus: int = 37,
+    style: Literal["dark", "light"] = "dark",
+    save_path: str | Path | None = None,
+    figsize: tuple[float, float] = (12, 5.5),
+) -> Figure:
+    """Dual-panel CRT labeling: digital root vs residue mod ``m`` vs packed.
+
+    Left: color by digital root (classic vortex).
+    Middle: color by ``k % m``.
+    Right: color by packed pair ``(dr, k%m)``.
+    Geometry shared (default 9/π).
+    """
+    from .core import digital_root, modular_label, paired_label
+
+    colors_meta = apply_style(style)
+    fig, axes = plt.subplots(1, 3, figsize=figsize)
+    x, y = circle_positions(num_steps, step)
+    th = np.linspace(0, TWO_PI, 400)
+    cx, cy = np.cos(th), np.sin(th)
+
+    drs = np.array(
+        [9 if i == 0 else digital_root(i) or 9 for i in range(num_steps)], dtype=int
+    )
+    residues = np.array([modular_label(i, modulus) for i in range(num_steps)], dtype=int)
+    packed = np.array(
+        [paired_label(i, modulus)[2] for i in range(num_steps)], dtype=int
+    )
+
+    panels = [
+        (drs, 0.5, 9.5, vortex_colormap(), f"digital root", "Vortex digit"),
+        (residues, -0.5, modulus - 0.5, label_colormap(modulus, "mod"), f"k % {modulus}", f"mod {modulus}"),
+        (
+            packed,
+            -0.5,
+            9 * modulus - 0.5,
+            label_colormap(modulus, "paired"),
+            f"paired (dr, k%{modulus})",
+            "packed",
+        ),
+    ]
+    for ax, (labs, vmin, vmax, cmap, title, cbar_label) in zip(axes, panels):
+        ax.plot(cx, cy, color=colors_meta["grid"], lw=0.9, alpha=0.7)
+        sc = ax.scatter(
+            x,
+            y,
+            c=labs,
+            cmap=cmap,
+            vmin=vmin,
+            vmax=vmax,
+            s=28,
+            edgecolors=colors_meta["fg"],
+            linewidths=0.2,
+            alpha=0.9,
+            zorder=5,
+        )
+        ax.set_aspect("equal")
+        ax.set_xlim(-1.15, 1.15)
+        ax.set_ylim(-1.15, 1.15)
+        ax.set_title(title, fontsize=10)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        fig.colorbar(sc, ax=ax, fraction=0.046, pad=0.04, label=cbar_label)
+
+    fig.suptitle(
+        f"CRT paired labeling · step≈{step:.4f} · m={modulus} · n={num_steps}",
+        fontsize=11,
     )
     fig.tight_layout()
     if save_path is not None:

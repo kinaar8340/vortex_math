@@ -32,15 +32,21 @@ TRINITY_DIGITS: frozenset[int] = frozenset({3, 6, 9})
 # (9 related to digital-root base; π ties the circle's geometry.)
 DEFAULT_STEP_RADIANS: float = 9.0 / np.pi
 
-# Labeling modulus (independent of geometric step size).
-# Step stays 9/π by default; only residue / bin labels change with m.
+# Labeling modulus (independent of geometric step size by default).
+# Step stays 9/π unless step_mode couples geometry to m (m/π).
 DEFAULT_LABEL_MODULUS: int = 9
 
 # High-signal moduli for sweeps (digit sum, R_3 factor, prime mover, CRT product).
-SUGGESTED_MODULI: tuple[int, ...] = (9, 37, 111, 333)
+CORE_MODULI: tuple[int, ...] = (9, 37, 111, 333)
+SUGGESTED_MODULI: tuple[int, ...] = CORE_MODULI  # alias for backward compatibility
+
+# Extra candidates: 142857 (7), small primes, 3^3, repunit-related 41.
+EXTENDED_MODULI: tuple[int, ...] = (7, 13, 27, 41)
 
 # Full circle
 TWO_PI: float = 2.0 * np.pi
+
+StepMode = Literal["nine_over_pi", "m_over_pi"]
 
 MappingMethod = Literal[
     "step_index",
@@ -49,6 +55,7 @@ MappingMethod = Literal[
     "cos_dr",
     "doubling_cycle",
     "mod",
+    "paired",
 ]
 
 
@@ -279,6 +286,131 @@ def modulus_sweep_report(
     return [doubling_cycle_structure(int(m)) for m in moduli]
 
 
+def resolve_moduli(
+    extended: bool = False,
+    moduli: Sequence[int] | None = None,
+) -> tuple[int, ...]:
+    """Choose modulus list for sweeps.
+
+    Parameters
+    ----------
+    extended :
+        If True and ``moduli`` is None, include :data:`EXTENDED_MODULI`
+        (7, 13, 27, 41) after the core set.
+    moduli :
+        Explicit list overrides ``extended``.
+    """
+    if moduli is not None:
+        return tuple(int(m) for m in moduli)
+    if extended:
+        # Preserve order; de-dupe if lists ever overlap.
+        seen: set[int] = set()
+        out: list[int] = []
+        for m in (*CORE_MODULI, *EXTENDED_MODULI):
+            if m not in seen:
+                seen.add(m)
+                out.append(m)
+        return tuple(out)
+    return tuple(CORE_MODULI)
+
+
+def step_radians_for(
+    modulus: int = DEFAULT_LABEL_MODULUS,
+    step_mode: StepMode | str = "nine_over_pi",
+    explicit: float | None = None,
+) -> float:
+    """Resolve geometric arc step from a step mode.
+
+    Parameters
+    ----------
+    modulus :
+        Used when ``step_mode == "m_over_pi"`` → ``m/π``.
+    step_mode :
+        - ``"nine_over_pi"`` (default): classic ``9/π`` (geometry decoupled from m).
+        - ``"m_over_pi"``: couple winding rate to the modulus → ``m/π``.
+    explicit :
+        If set, overrides the mode and returns this value (radians).
+
+    Returns
+    -------
+    float
+        Arc step in radians.
+    """
+    if explicit is not None:
+        return float(explicit)
+    mode = str(step_mode).strip().lower().replace("-", "_")
+    # Accept CLI aliases
+    aliases = {
+        "nine_over_pi": "nine_over_pi",
+        "9_over_pi": "nine_over_pi",
+        "default": "nine_over_pi",
+        "m_over_pi": "m_over_pi",
+        "mod_over_pi": "m_over_pi",
+    }
+    mode = aliases.get(mode, mode)
+    if mode == "nine_over_pi":
+        return float(DEFAULT_STEP_RADIANS)
+    if mode == "m_over_pi":
+        if modulus <= 0:
+            raise ValueError(f"modulus must be positive for m/π step, got {modulus}")
+        return float(modulus) / float(np.pi)
+    raise ValueError(
+        f"Unknown step_mode {step_mode!r}. Use 'nine_over_pi' or 'm_over_pi'."
+    )
+
+
+def paired_label(
+    k: int,
+    modulus: int = 37,
+) -> tuple[int, int, int]:
+    """CRT-style paired label: classic digital root + residue mod ``m``.
+
+    Returns ``(digital_root, k % m, packed)`` where packed encodes both for
+    a single colormap channel::
+
+        packed = (dr - 1) * m + r    # dr ∈ 1..9, r ∈ 0..m-1
+        # → packed ∈ 0 .. 9m - 1
+
+    Step 0 uses digital root 9 (completion / center convention).
+
+    Parameters
+    ----------
+    k :
+        Step index (or other integer).
+    modulus :
+        Second component modulus (default 37 — your repunit prime).
+
+    Returns
+    -------
+    dr, residue, packed : tuple[int, int, int]
+    """
+    if modulus <= 0:
+        raise ValueError(f"modulus must be positive, got {modulus}")
+    kk = int(k)
+    if kk == 0:
+        dr = 9
+    else:
+        dr = digital_root(kk)
+        if dr == 0:
+            dr = 9
+    residue = modular_label(kk, modulus)
+    packed = (dr - 1) * int(modulus) + residue
+    return dr, residue, packed
+
+
+def unpack_paired_label(
+    packed: int,
+    modulus: int = 37,
+) -> tuple[int, int]:
+    """Inverse of :func:`paired_label` packing → ``(digital_root, residue)``."""
+    if modulus <= 0:
+        raise ValueError(f"modulus must be positive, got {modulus}")
+    p = int(packed)
+    dr = (p // int(modulus)) + 1
+    residue = p % int(modulus)
+    return dr, residue
+
+
 # ---------------------------------------------------------------------------
 # Unit-circle positions
 # ---------------------------------------------------------------------------
@@ -438,6 +570,19 @@ def _map_mod(
     return modular_label(step_index, modulus)
 
 
+def _map_paired(
+    theta: float,
+    step_index: int | None = None,
+    modulus: int = DEFAULT_LABEL_MODULUS,
+    **_kwargs: object,
+) -> int:
+    """Packed (digital_root, k % m) for dual-structure colormaps."""
+    if step_index is None:
+        raise ValueError("step_index required for method 'paired'")
+    _dr, _r, packed = paired_label(step_index, modulus)
+    return packed
+
+
 _MAPPING_REGISTRY: dict[str, Callable[..., int]] = {
     "step_index": _map_step_index,
     "angle_bin": _map_angle_bin,
@@ -445,6 +590,7 @@ _MAPPING_REGISTRY: dict[str, Callable[..., int]] = {
     "cos_dr": _map_cos_dr,
     "doubling_cycle": _map_doubling_cycle,
     "mod": _map_mod,
+    "paired": _map_paired,
 }
 
 
@@ -475,6 +621,7 @@ def position_to_label(
         - ``"step_index"`` (default): digital root when ``modulus==9``
           (step 0 → 9); else ``step_index % modulus``.
         - ``"mod"``: always ``step_index % modulus`` (no digital-root case).
+        - ``"paired"``: packed ``(digital_root(k), k % m)`` CRT-style dual label.
         - ``"angle_bin"``: ``modulus`` equal arcs (1–9 when m=9, else 0..m-1).
         - ``"sin_dr"`` / ``"cos_dr"``: digital root or modular map of scaled trig.
         - ``"doubling_cycle"``: walk the ×2 orbit mod ``m`` by step index.
@@ -483,14 +630,15 @@ def position_to_label(
     step_index :
         Discrete step number along the orbit (required for some methods).
     modulus :
-        Labeling modulus (does **not** change the arc step).
+        Labeling modulus. Geometric step is chosen separately via
+        :func:`step_radians_for` (default still ``9/π``).
 
     Returns
     -------
     int
         Label: classic vortex digit in 1–9 when ``modulus==9`` and method is
-        digital-root based; otherwise a residue in ``0 .. modulus-1`` (or
-        doubling-orbit residue).
+        digital-root based; residue in ``0 .. modulus-1``; or packed paired
+        code for ``"paired"``.
     """
     if modulus <= 0:
         raise ValueError(f"modulus must be positive, got {modulus}")
@@ -618,8 +766,9 @@ def doubling_edges() -> list[tuple[int, int]]:
 def default_config() -> dict:
     """Small config dict for step size and mapping (easy to extend)."""
     return {
-        "step_radians": DEFAULT_STEP_RADIANS,  # geometry: keep 9/π by default
-        "label_modulus": DEFAULT_LABEL_MODULUS,  # free parameter for mechanism search
+        "step_radians": DEFAULT_STEP_RADIANS,  # geometry: 9/π unless step_mode changes it
+        "step_mode": "nine_over_pi",  # or "m_over_pi" to couple step to modulus
+        "label_modulus": DEFAULT_LABEL_MODULUS,
         "mapping_method": "step_index",
         "start_angle": 0.0,
         "style": "dark",  # or "light"

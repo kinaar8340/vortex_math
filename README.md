@@ -165,7 +165,37 @@ python src/main.py --plot-steps -m 333
 python src/main.py --sweep-moduli --num-steps 120
 ```
 
-Core helpers: `doubling_orbit`, `modular_label`, `doubling_cycle_structure`, `labels_for_orbit`.
+### Step mode (`--step-mode`) — couple geometry to m
+
+| mode | Arc step | Meaning |
+|------|----------|---------|
+| `nine_over_pi` (default) | `9/π` | Labels change with m; **positions fixed** |
+| `m_over_pi` | `m/π` | Winding rate **and** labels couple to m |
+
+```bash
+# Most interesting: resonance of m/π rotation with label set m
+python src/main.py --plot-steps -m 37 --step-mode m_over_pi --num-steps 150
+python src/main.py --plot-steps -m 111 --step-mode m_over_pi
+
+# Full sweep: circle + density + torus under m/π
+python src/main.py --sweep-moduli --step-mode m_over_pi --sweep-views all --num-steps 120
+
+# Extended moduli (adds 7, 13, 27, 41)
+python src/main.py --sweep-moduli --extended --step-mode m_over_pi --sweep-views circle,density
+```
+
+### Paired CRT labeling (`--method paired`)
+
+Keeps **both** classic digital roots and residue mod m:
+
+```bash
+python src/main.py --plot-steps -m 37 --method paired --num-steps 150
+python src/main.py --paired-panel -m 37 --num-steps 150
+```
+
+Packed code: `(digital_root − 1) · m + (k mod m)`.
+
+Core helpers: `doubling_orbit`, `modular_label`, `step_radians_for`, `paired_label`, `labels_for_orbit`.
 
 ## Tests
 

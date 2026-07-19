@@ -15,8 +15,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.core import (
+    CORE_MODULI,
     DEFAULT_LABEL_MODULUS,
     DEFAULT_STEP_RADIANS,
+    EXTENDED_MODULI,
     SUGGESTED_MODULI,
     TRINITY_DIGITS,
     TWO_PI,
@@ -31,10 +33,14 @@ from src.core import (
     labels_for_orbit,
     modular_label,
     modulus_sweep_report,
+    paired_label,
     position_to_label,
     position_to_vortex_digit,
     register_mapping,
+    resolve_moduli,
+    step_radians_for,
     trinity_related_sequence,
+    unpack_paired_label,
     vortex_doubling_sequence,
     vortex_number_circle_coords,
 )
@@ -246,6 +252,46 @@ class TestLabelModulus:
                 position_to_label(0.0, method="doubling_cycle", step_index=i, modulus=37)
                 == orbit[i % len(orbit)]
             )
+
+
+class TestStepModesAndPaired:
+    def test_step_nine_over_pi(self):
+        assert math.isclose(
+            step_radians_for(37, "nine_over_pi"), DEFAULT_STEP_RADIANS, rel_tol=0, abs_tol=1e-15
+        )
+
+    def test_step_m_over_pi(self):
+        s = step_radians_for(37, "m_over_pi")
+        assert math.isclose(s, 37.0 / math.pi, rel_tol=0, abs_tol=1e-12)
+        s111 = step_radians_for(111, "m_over_pi")
+        assert s111 > s
+
+    def test_explicit_overrides_mode(self):
+        assert step_radians_for(37, "m_over_pi", explicit=1.5) == 1.5
+
+    def test_paired_label_roundtrip(self):
+        dr, r, packed = paired_label(111, 37)
+        assert r == 111 % 37
+        assert digital_root(111) == dr
+        dr2, r2 = unpack_paired_label(packed, 37)
+        assert (dr2, r2) == (dr, r)
+
+    def test_paired_method(self):
+        packed = position_to_label(0.0, method="paired", step_index=10, modulus=37)
+        assert packed == paired_label(10, 37)[2]
+        assert 0 <= packed < 9 * 37
+
+    def test_resolve_moduli(self):
+        assert resolve_moduli() == CORE_MODULI
+        ext = resolve_moduli(extended=True)
+        assert 7 in ext and 41 in ext and 37 in ext
+        assert set(CORE_MODULI).issubset(set(ext))
+        assert set(EXTENDED_MODULI).issubset(set(ext))
+
+    def test_geometry_changes_with_m_over_pi(self):
+        x9, y9 = circle_positions(5, step_radians_for(9, "m_over_pi"))
+        x37, y37 = circle_positions(5, step_radians_for(37, "m_over_pi"))
+        assert not np.allclose(x9, x37)
 
 
 class TestVortexLayout:
